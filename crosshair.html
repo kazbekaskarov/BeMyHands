@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+  <title>BeMyHands · precision</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      width: 96px; height: 96px;
+      background: transparent !important;
+      overflow: hidden;
+      pointer-events: none;
+      -webkit-app-region: no-drag;
+    }
+    .crosshair {
+      position: absolute; inset: 0;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    /* Outer ring */
+    .crosshair::before {
+      content: '';
+      position: absolute; inset: 8px;
+      border: 2px solid rgba(99, 102, 241, .9);
+      border-radius: 50%;
+      box-shadow:
+        0 0 0 1px rgba(0,0,0,.45),
+        0 0 18px rgba(99, 102, 241, .55) inset,
+        0 0 14px rgba(99, 102, 241, .55);
+    }
+    /* Inner dot */
+    .crosshair::after {
+      content: '';
+      position: absolute;
+      left: 50%; top: 50%;
+      width: 6px; height: 6px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      background: rgba(99, 102, 241, 1);
+      box-shadow: 0 0 0 2px rgba(255,255,255,.95), 0 0 6px rgba(0,0,0,.5);
+    }
+    /* Cross arms via separate elements (to keep above the ring) */
+    .arm {
+      position: absolute;
+      background: rgba(99, 102, 241, .95);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.5);
+    }
+    .arm.v { left: 50%; top: 4px;  bottom: 4px; width: 2px;  transform: translateX(-1px); }
+    .arm.h { top: 50%;  left: 4px; right: 4px;  height: 2px; transform: translateY(-1px); }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1);    opacity: .85; }
+      50%      { transform: scale(1.06); opacity: 1;   }
+    }
+  </style>
+</head>
+<body>
+  <div class="crosshair">
+    <span class="arm v"></span>
+    <span class="arm h"></span>
+  </div>
+</body>
+</html>
+
