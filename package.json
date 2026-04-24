@@ -1,0 +1,96 @@
+{
+  "name": "bemyhands",
+  "version": "0.2.0",
+  "description": "BeMyHands — hands-free desktop control for macOS. Face tracking moves the cursor, voice typing inputs text. Designed for users who can't use a mouse or keyboard.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "setup": "node scripts/setup-whisper.js",
+    "pack": "node node_modules/electron-builder/cli.js --dir",
+    "dist": "node node_modules/electron-builder/cli.js --mac --arm64"
+  },
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.bemyhands.app",
+    "productName": "BeMyHands",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "bar-preload.js",
+      "renderer.js",
+      "index.html",
+      "bar.html",
+      "styles.css",
+      "scripts/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!node_modules/app-builder-lib/**",
+      "!node_modules/dmg-builder/**",
+      "!**/*.{ts,map,md}",
+      "!**/test/**",
+      "!**/tests/**"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "BeMyHands использует камеру для отслеживания движений лица.",
+        "NSMicrophoneUsageDescription": "BeMyHands использует микрофон для голосового ввода (Local Whisper)."
+      }
+    },
+    "dmg": {
+      "title": "BeMyHands ${version}",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "app-builder-bin": "^5.0.0-alpha.12",
+    "electron": "^31.0.0",
+    "electron-builder": "^26.8.1"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.2",
+    "dotenv": "^16.4.5"
+  }
+}

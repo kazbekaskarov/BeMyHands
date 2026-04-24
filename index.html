@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline' 'wasm-unsafe-eval';
+                 style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline';
+                 font-src 'self' https://cdn.jsdelivr.net data:;
+                 img-src 'self' data: blob:;
+                 media-src 'self' blob:;
+                 connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com;
+                 worker-src 'self' blob:;" />
+  <title>BeMyHands — face & voice control</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/index.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark">✋</div>
+      <div>BeMyHands <small>face &amp; voice control</small></div>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="status-pill" id="statusPill">
+      <span class="pulse"></span>
+      <span id="status">Загрузка…</span>
+    </div>
+
+    <button id="useMode" class="primary" title="Свернуть в плавающий виджет — приложение продолжит работать в фоне">
+      👤 Режим использования
+    </button>
+  </header>
+
+  <main class="app-main">
+    <!-- ============ LEFT: camera ============ -->
+    <aside class="cam-card">
+      <div class="cam-wrap" id="camWrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+      </div>
+      <div class="cam-meta">
+        <span class="chip" id="chipDelegate">⚙️ —</span>
+        <span class="chip" id="chipFps">📷 —</span>
+        <span class="chip" id="chipFace">🙂 —</span>
+      </div>
+    </aside>
+
+    <!-- ============ RIGHT: cards ============ -->
+    <section class="cards">
+
+      <!-- ===== Управление ===== -->
+      <div class="card">
+        <h3><span class="ico">🖱</span> Управление курсором</h3>
+        <div class="row">
+          <button id="toggleControl" class="primary large">▶ Включить управление</button>
+          <button id="calibrate">🎯 Калибровать центр</button>
+          <span id="modeIndicator" class="badge"></span>
+        </div>
+        <hr />
+        <div class="row">
+          <div class="field">
+            <label for="tracker">Источник</label>
+            <select id="tracker">
+              <option value="nose" selected>Нос (стабильнее)</option>
+              <option value="eyes">Между глаз</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="smooth">Сглаживание</label>
+            <input id="smooth" type="range" min="0" max="0.95" step="0.05" value="0.7" />
+          </div>
+          <div class="field">
+            <label for="sensX">Чувствительность X</label>
+            <input id="sensX" type="range" min="1" max="6" step="0.1" value="2.6" />
+          </div>
+          <div class="field">
+            <label for="sensY">Чувствительность Y</label>
+            <input id="sensY" type="range" min="1" max="6" step="0.1" value="2.6" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <label><input id="dwellClick" type="checkbox" /> Клик задержкой (1.2 с без движения)</label>
+        </div>
+      </div>
+
+      <!-- ===== Жесты ===== -->
+      <div class="card gestures">
+        <h3><span class="ico">😊</span> Жесты лицом</h3>
+        <table>
+          <thead>
+            <tr><th>Жест</th><th>Действие</th><th>Порог</th><th>Сейчас</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><label><input type="checkbox" id="g_mouth" checked /> 👄 Открыть рот</label></td>
+              <td>Левый клик</td>
+              <td><input type="range" id="g_mouth_t" min="0.15" max="0.7" step="0.01" value="0.35" /></td>
+              <td><span class="bar" id="g_mouth_v">0.00</span></td>
+            </tr>
+            <tr>
+              <td><label><input type="checkbox" id="g_brow" checked /> 🤨 Поднять брови</label></td>
+              <td>Правый клик</td>
+              <td><input type="range" id="g_brow_t" min="0.20" max="0.80" step="0.01" value="0.45" /></td>
+              <td><span class="bar" id="g_brow_v">0.00</span></td>
+            </tr>
+            <tr>
+              <td><label><input type="checkbox" id="g_smile" checked /> 😊 Улыбнуться</label></td>
+              <td>Двойной клик</td>
+              <td><input type="range" id="g_smile_t" min="0.20" max="0.80" step="0.01" value="0.50" /></td>
+              <td><span class="bar" id="g_smile_v">0.00</span></td>
+            </tr>
+            <tr>
+              <td><label><input type="checkbox" id="g_winkL" checked /> 😉 Закрыть левый глаз</label></td>
+              <td>Зажать ЛКМ (drag)</td>
+              <td><input type="range" id="g_winkL_t" min="0.10" max="0.70" step="0.01" value="0.25" /></td>
+              <td><span class="bar" id="g_winkL_v">0.00</span></td>
+            </tr>
+            <tr>
+              <td><label><input type="checkbox" id="g_winkR" checked /> 😜 Закрыть правый глаз</label></td>
+              <td>Прокрутка головой</td>
+              <td><input type="range" id="g_winkR_t" min="0.10" max="0.70" step="0.01" value="0.25" /></td>
+              <td><span class="bar" id="g_winkR_v">0.00</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="hint">
+          <b>Drag:</b> пока закрыт левый глаз — ЛКМ зажата, двигай головой; открыл — отпустилась.<br />
+          <b>Scroll:</b> закрыл правый глаз → наклон головы вверх/вниз = прокрутка страницы.
+        </div>
+      </div>
+
+      <!-- ===== Голос ===== -->
+      <div class="card">
+        <h3><span class="ico">🎙</span> Голосовой ввод</h3>
+        <div class="row">
+          <button id="toggleVoice" class="primary large">🎙 Начать голосовой ввод</button>
+          <div class="field">
+            <label for="voiceLang">Язык</label>
+            <select id="voiceLang">
+              <option value="ru-RU" selected>Русский</option>
+              <option value="en-US">English (US)</option>
+              <option value="kk-KZ">Қазақша</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="voiceEngine">Движок</label>
+            <select id="voiceEngine">
+              <option value="local" selected>Local Whisper (offline)</option>
+              <option value="webspeech">Web Speech (онлайн)</option>
+              <option value="whisper">OpenAI Whisper (.env)</option>
+            </select>
+          </div>
+          <label title="Слушать непрерывно: автоматически нарезает речь по тишине и печатает">
+            <input id="continuousVoice" type="checkbox" checked /> Непрерывно
+          </label>
+        </div>
+        <div class="transcript" id="transcript" placeholder="Распознанный текст появится здесь… Скажите «клик», «пауза», «продолжи» — это команды."></div>
+      </div>
+
+      <!-- ===== Безрукий режим ===== -->
+      <div class="card">
+        <h3><span class="ico">🤲</span> Безрукий режим</h3>
+        <div class="row">
+          <label><input id="autoStart" type="checkbox" /> Автозапуск при старте (управление + голос)</label>
+        </div>
+        <div class="row">
+          <label><input id="autoPause" type="checkbox" checked /> Авто-пауза если лица нет 2 сек</label>
+        </div>
+        <div class="row">
+          <label><input id="hotCorners" type="checkbox" checked /> Углы экрана (TR=окно, TL=пауза, BR=стоп)</label>
+        </div>
+        <div class="row">
+          <label><input id="voiceCommands" type="checkbox" checked /> Голосовые команды («пауза», «клик», «вверх»…)</label>
+        </div>
+      </div>
+
+      <!-- ===== Помощь ===== -->
+      <div class="card">
+        <h3><span class="ico">🔐</span> Разрешения macOS</h3>
+        <details class="help">
+          <summary>Открыть панели разрешений (Accessibility / Camera / Microphone)</summary>
+          <p class="muted" style="margin-top:8px">
+            Чтобы курсор и клавиатура работали в других приложениях, добавьте программу в:
+          </p>
+          <ul>
+            <li><button data-pane="accessibility">Accessibility</button> — обязательно</li>
+            <li><button data-pane="camera">Camera</button></li>
+            <li><button data-pane="microphone">Microphone</button></li>
+          </ul>
+          <p class="muted">После выдачи прав <b>перезапустите приложение</b>.</p>
+        </details>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Hidden legacy widget (kept for renderer.js compatibility) -->
+  <div id="compactWidget" hidden>
+    <div><span id="compactDot"></span><span id="compactText"></span><span id="compactMode"></span></div>
+    <button id="exitUseMode">← Назад в настройки</button>
+  </div>
+
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>
+

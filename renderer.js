@@ -1,0 +1,1151 @@
+// renderer.js — MediaPipe FaceLandmarker + voice typing
+import {
+  FaceLandmarker,
+  FilesetResolver,
+} from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+
+// -------------------- DOM --------------------
+const $ = (id) => document.getElementById(id);
+const video = $('video');
+const overlay = $('overlay');
+const ctx = overlay.getContext('2d');
+const statusEl = $('status');
+const transcriptEl = $('transcript');
+
+const toggleBtn = $('toggleControl');
+const calibrateBtn = $('calibrate');
+const trackerSel = $('tracker');
+const smoothEl = $('smooth');
+const sensXEl = $('sensX');
+const sensYEl = $('sensY');
+const blinkClickEl = $('g_mouth');     // legacy alias kept for code below
+const mouthThreshEl = $('g_mouth_t');
+const mouthValEl = $('g_mouth_v');
+const dwellClickEl = $('dwellClick');
+const modeIndicatorEl = $('modeIndicator');
+
+// Hands-free controls
+const autoStartEl     = $('autoStart');
+const autoPauseEl     = $('autoPause');
+const hotCornersEl    = $('hotCorners');
+const voiceCommandsEl = $('voiceCommands');
+const useModeBtn      = $('useMode');
+const compactEl       = $('compactWidget');
+const compactDot      = $('compactDot');
+const compactText     = $('compactText');
+const compactMode     = $('compactMode');
+
+// All gesture controls (id prefix g_)
+const gestureDefs = [
+  { key: 'mouth',  on: 'g_mouth',  thr: 'g_mouth_t',  val: 'g_mouth_v',  shape: 'jawOpen',        action: 'click' },
+  { key: 'brow',   on: 'g_brow',   thr: 'g_brow_t',   val: 'g_brow_v',   shape: 'browInnerUp',    action: 'rightClick' },
+  { key: 'smile',  on: 'g_smile',  thr: 'g_smile_t',  val: 'g_smile_v',  shape: 'smile',          action: 'doubleClick' },
+  { key: 'winkL',  on: 'g_winkL',  thr: 'g_winkL_t',  val: 'g_winkL_v',  shape: 'winkLeft',       action: 'holdDrag' },
+  { key: 'winkR',  on: 'g_winkR',  thr: 'g_winkR_t',  val: 'g_winkR_v',  shape: 'winkRight',      action: 'holdScroll' },
+];
+for (const g of gestureDefs) {
+  g.onEl  = document.getElementById(g.on);
+  g.thrEl = document.getElementById(g.thr);
+  g.valEl = document.getElementById(g.val);
+  g.state = { was: false, lastFireAt: 0 };
+}
+
+const voiceBtn = $('toggleVoice');
+const voiceLangEl = $('voiceLang');
+const voiceEngineEl = $('voiceEngine');
+
+// -------------------- State --------------------
+let bootstrap = { screen: { width: 1920, height: 1080 }, hasOpenAIKey: false, platform: 'darwin' };
+let faceLandmarker = null;
+let running = false;
+let controlEnabled = false;
+let calibCenter = null; // {x, y} in normalized coords from camera image (unmirrored)
+let smoothed = null;
+let lastMoveAt = 0;
+let lastMovePos = { x: 0, y: 0 };
+let dwellTimer = null;
+let mouthState = { openSince: 0, lastClickAt: 0, wasOpen: false };
+// Rolling history of recent cursor positions to anchor the click before mouth-open jitter.
+const posHistory = []; // { t, x, y }
+let freezeUntil = 0;   // ignore cursor updates until this timestamp (ms)
+// Modal states
+let dragActive = false;
+let scrollMode = false;
+let scrollAccum = { x: 0, y: 0 };
+let lastScrollAt = 0;
+
+// Diagnostics: track frame throughput so we can tell whether camera/MP/face is the problem.
+const diag = { frames: 0, faceFrames: 0, detectErrors: 0, startedAt: 0 };
+
+window.yonie.onBootstrap((b) => {
+  bootstrap = b;
+  if (!b.hasOpenAIKey) {
+    voiceEngineEl.querySelector('option[value="whisper"]').disabled = true;
+  }
+  if (!b.hasLocalWhisper) {
+    const opt = voiceEngineEl.querySelector('option[value="local"]');
+    opt.textContent = 'Local Whisper (нет модели/CLI — npm run setup)';
+  } else {
+    const opt = voiceEngineEl.querySelector('option[value="local"]');
+    opt.textContent = `Local Whisper (offline, ${b.whisperModel || 'large-v3'})`;
+  }
+  // Restore saved configuration (helper set this up earlier).
+  applyConfig(b.config || {});
+  // Auto-start cursor + voice as soon as we have a saved calibration.
+  // (After the first setup, every subsequent launch is fully hands-free.)
+  if (b.config && b.config.calibCenter) {
+    setTimeout(autoStartAll, 1500); // give camera + model a moment
+  }
+});
+
+// ---- Persistent configuration -----------------------------------------------------
+
+const PERSISTED_CONTROLS = [
+  'tracker', 'smooth', 'sensX', 'sensY', 'dwellClick',
+  'g_mouth', 'g_mouth_t', 'g_brow', 'g_brow_t', 'g_smile', 'g_smile_t',
+  'g_winkL', 'g_winkL_t', 'g_winkR', 'g_winkR_t',
+  'voiceLang', 'voiceEngine', 'continuousVoice',
+  'autoStart', 'autoPause', 'hotCorners', 'voiceCommands',
+];
+let savedConfig = {};
+
+function applyConfig(cfg) {
+  savedConfig = { ...cfg };
+  for (const id of PERSISTED_CONTROLS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (Object.prototype.hasOwnProperty.call(cfg, id)) {
+      if (el.type === 'checkbox') el.checked = Boolean(cfg[id]);
+      else el.value = cfg[id];
+    }
+  }
+  if (cfg.calibCenter && typeof cfg.calibCenter.x === 'number') {
+    calibCenter = { x: cfg.calibCenter.x, y: cfg.calibCenter.y };
+    if (statusEl) statusEl.textContent = 'Сохранённая калибровка загружена.';
+  }
+}
+
+let saveTimer = null;
+function persistSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const cfg = { ...savedConfig };
+    for (const id of PERSISTED_CONTROLS) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      cfg[id] = el.type === 'checkbox' ? el.checked : el.value;
+    }
+    if (calibCenter) cfg.calibCenter = calibCenter;
+    // runMode now means "main settings window currently hidden" — track via mainWindow visibility
+    // is impossible from renderer, so we just persist false; user can re-enable via "Use mode" btn.
+    cfg.runMode = false;
+    savedConfig = cfg;
+    window.yonie.configSet(cfg);
+  }, 300);
+}
+
+// Save on any control change.
+for (const id of PERSISTED_CONTROLS) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', persistSoon);
+}
+
+// -------------------- MediaPipe init --------------------
+let mpFileset = null;
+let mpDelegate = 'GPU';
+let lastDetectError = null;
+
+async function initFaceLandmarker() {
+  statusEl.textContent = 'Загружаю MediaPipe wasm…';
+  if (!mpFileset) {
+    mpFileset = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+  }
+  const buildOpts = (delegate) => ({
+    baseOptions: {
+      modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+      delegate,
+    },
+    runningMode: 'VIDEO',
+    numFaces: 1,
+    outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: false,
+  });
+  try {
+    faceLandmarker = await FaceLandmarker.createFromOptions(mpFileset, buildOpts('GPU'));
+    mpDelegate = 'GPU';
+  } catch (e) {
+    console.warn('[MediaPipe] GPU delegate failed, fallback to CPU:', e);
+    statusEl.textContent = 'GPU не доступен, перехожу на CPU…';
+    faceLandmarker = await FaceLandmarker.createFromOptions(mpFileset, buildOpts('CPU'));
+    mpDelegate = 'CPU';
+  }
+  statusEl.textContent = `Модель загружена (${mpDelegate}). Открываю камеру…`;
+}
+
+async function listCameras() {
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return all.filter((d) => d.kind === 'videoinput');
+  } catch { return []; }
+}
+
+let currentStream = null;
+async function initCamera() {
+  // Try preferred constraints first; if they fail, fall back to "any" videoinput.
+  const attempts = [
+    { video: { width: 640, height: 480, facingMode: 'user' }, audio: false },
+    { video: { facingMode: 'user' }, audio: false },
+    { video: true, audio: false },
+  ];
+  let stream = null, lastErr = null;
+  for (const c of attempts) {
+    try { stream = await navigator.mediaDevices.getUserMedia(c); break; }
+    catch (e) { lastErr = e; console.warn('[camera] getUserMedia failed for', c, e.name, e.message); }
+  }
+  if (!stream) {
+    // Last resort: pick first available videoinput by deviceId.
+    const cams = await listCameras();
+    if (cams.length) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: cams[0].deviceId } }, audio: false,
+        });
+      } catch (e) { lastErr = e; }
+    }
+  }
+  if (!stream) {
+    const reason = lastErr ? `${lastErr.name}: ${lastErr.message}` : 'нет доступной камеры';
+    throw new Error(`Камера не открылась → ${reason}`);
+  }
+
+  currentStream = stream;
+  video.srcObject = stream;
+  await new Promise((r) => (video.onloadedmetadata = r));
+  await video.play();
+  overlay.width = video.videoWidth || 640;
+  overlay.height = video.videoHeight || 480;
+
+  // If the OS yanks the stream (e.g., another app grabs the camera), try to recover.
+  const track = stream.getVideoTracks()[0];
+  if (track) {
+    track.addEventListener('ended', () => {
+      console.warn('[camera] track ended — попытка переподключения через 1с');
+      statusEl.textContent = 'Камера отключилась. Переподключаюсь…';
+      currentStream = null;
+      setTimeout(() => initCamera().catch((e) => {
+        statusEl.textContent = 'Не удалось переподключить камеру: ' + e.message;
+      }), 1000);
+    });
+    track.addEventListener('mute', () => console.warn('[camera] track muted'));
+    track.addEventListener('unmute', () => console.warn('[camera] track unmuted'));
+  }
+
+  statusEl.textContent = `Готово (камера ${video.videoWidth}×${video.videoHeight}). Калибруйте центр (🎯).`;
+}
+
+// -------------------- Loop --------------------
+// Use setInterval (not requestAnimationFrame) so the loop keeps running when
+// the Electron window is minimized or hidden — rAF is paused by the OS/Chromium.
+let loopTimer = null;
+function startLoop() {
+  if (loopTimer) return;
+  loopTimer = setInterval(tick, 1000 / 60);
+}
+function stopLoop() {
+  if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
+}
+
+function tick() {
+  if (!running) return;
+  if (video.readyState >= 2 && faceLandmarker) {
+    const now = performance.now();
+    let result;
+    try {
+      result = faceLandmarker.detectForVideo(video, now);
+      diag.frames++;
+    } catch (e) {
+      // Surface the error so we know why detection isn't producing landmarks.
+      lastDetectError = e;
+      diag.detectErrors++;
+      if (diag.detectErrors === 1 || diag.detectErrors % 60 === 0) {
+        console.warn('[detectForVideo] error:', e);
+      }
+      return;
+    }
+    if (document.visibilityState === 'visible') drawOverlay(result);
+    if (result && result.faceLandmarks && result.faceLandmarks.length) {
+      diag.faceFrames++;
+      handleFace(result, now);
+    }
+  }
+}
+
+function drawOverlay(result) {
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  if (!result.faceLandmarks || !result.faceLandmarks.length) return;
+  const lm = result.faceLandmarks[0];
+  // Draw nose tip + eye centers
+  const points = [1, 33, 263]; // nose tip, left eye outer, right eye outer
+  ctx.fillStyle = '#16a34a';
+  for (const i of points) {
+    const p = lm[i];
+    if (!p) continue;
+    ctx.beginPath();
+    ctx.arc(p.x * overlay.width, p.y * overlay.height, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Center marker if calibrated
+  if (calibCenter) {
+    ctx.strokeStyle = '#2c6cf6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(calibCenter.x * overlay.width, calibCenter.y * overlay.height, 10, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+function handleFace(result, now) {
+  const lm = result.faceLandmarks[0];
+  const tracker = trackerSel.value;
+  let pt;
+  if (tracker === 'eyes') {
+    const a = lm[33], b = lm[263];
+    pt = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  } else {
+    pt = { x: lm[1].x, y: lm[1].y };
+  }
+
+  if (!calibCenter) return;
+
+  // Sensitivity & mirroring (camera is mirrored visually; invert x so head-right → cursor-right).
+  const sensX = parseFloat(sensXEl.value);
+  const sensY = parseFloat(sensYEl.value);
+  let dx = -(pt.x - calibCenter.x) * sensX; // invert
+  let dy = (pt.y - calibCenter.y) * sensY;
+
+  // Map deltas to absolute screen coordinates around screen center.
+  const sw = bootstrap.screen.width;
+  const sh = bootstrap.screen.height;
+  let targetX = sw / 2 + dx * sw;
+  let targetY = sh / 2 + dy * sh;
+  targetX = Math.max(1, Math.min(sw - 2, targetX));
+  targetY = Math.max(1, Math.min(sh - 2, targetY));
+
+  // EMA smoothing
+  const a = parseFloat(smoothEl.value);
+  if (!smoothed) smoothed = { x: targetX, y: targetY };
+  smoothed.x = a * smoothed.x + (1 - a) * targetX;
+  smoothed.y = a * smoothed.y + (1 - a) * targetY;
+
+  // Throttle to ~90Hz
+  if (controlEnabled && now - lastMoveAt > 11) {
+    lastMoveAt = now;
+    const moved = Math.hypot(smoothed.x - lastMovePos.x, smoothed.y - lastMovePos.y);
+    lastMovePos = { x: smoothed.x, y: smoothed.y };
+
+    // Record history for click anchoring (keep last ~500ms).
+    posHistory.push({ t: now, x: smoothed.x, y: smoothed.y });
+    while (posHistory.length && now - posHistory[0].t > 500) posHistory.shift();
+
+    if (scrollMode) {
+      // In scroll mode: head movement scrolls, cursor stays put.
+      // Use RAW head delta (not multiplied by cursor sensitivity), so scroll feel is independent
+      // of the cursor sensitivity sliders.
+      if (now - lastScrollAt > 40) {
+        lastScrollAt = now;
+        const rawDx = -(pt.x - calibCenter.x);
+        const rawDy =  (pt.y - calibCenter.y);
+        const DEAD = 0.03;
+        const ramp = (v) => {
+          const a = Math.abs(v);
+          if (a < DEAD) return 0;
+          // Up to 25 wheel ticks per call; quadratic so small tilts stay slow, big tilts fly.
+          const t = (a - DEAD) / 0.18;
+          const ticks = Math.min(25, Math.max(5, Math.round(5 + t * t * 20)));
+          return v < 0 ? -ticks : ticks;
+        };
+        const sx = ramp(rawDx);
+        const sy = ramp(rawDy);
+        if (sx || sy) window.yonie.scroll(sx, sy);
+      }
+    } else if (now >= freezeUntil) {
+      window.yonie.moveCursor(smoothed.x, smoothed.y);
+    }
+
+    // Dwell click (only when not in special modes).
+    if (dwellClickEl.checked && !scrollMode && !dragActive && now >= freezeUntil) {
+      if (moved < 4) {
+        if (!dwellTimer) {
+          dwellTimer = setTimeout(() => {
+            window.yonie.click('left');
+            dwellTimer = null;
+          }, 1200);
+        }
+      } else if (dwellTimer) {
+        clearTimeout(dwellTimer);
+        dwellTimer = null;
+      }
+    }
+  }
+
+  // ---- Gestures (blendshape-driven) ----
+  if (result.faceBlendshapes && result.faceBlendshapes.length) {
+    handleGestures(result.faceBlendshapes[0].categories, now);
+  }
+}
+
+function handleGestures(cats, now) {
+  // Build a fast lookup of blendshape scores.
+  const m = {};
+  for (const c of cats) m[c.categoryName] = c.score;
+
+  const blinkL = m.eyeBlinkLeft || 0;
+  const blinkR = m.eyeBlinkRight || 0;
+
+  // Derived shapes for the simple gestures.
+  const shapes = {
+    jawOpen:     m.jawOpen || 0,
+    browInnerUp: Math.max(m.browInnerUp || 0, ((m.browOuterUpLeft || 0) + (m.browOuterUpRight || 0)) / 2),
+    smile:       ((m.mouthSmileLeft || 0) + (m.mouthSmileRight || 0)) / 2,
+    // For winks we expose just the asymmetry as the "score" so the live bar is meaningful,
+    // but the actual trigger uses an additional absolute closed-eye check (see below).
+    winkLeft:    Math.max(0, blinkL - blinkR),
+    winkRight:   Math.max(0, blinkR - blinkL),
+  };
+
+  for (const g of gestureDefs) {
+    const score = shapes[g.shape] || 0;
+    if (g.valEl) {
+      g.valEl.textContent = score.toFixed(2);
+      g.valEl.classList.toggle('hot', score > parseFloat(g.thrEl.value));
+    }
+    if (!g.onEl.checked || !controlEnabled) {
+      // If we were holding drag/scroll, release it cleanly.
+      if (g.state.was) {
+        if (g.action === 'holdDrag' && dragActive) {
+          dragActive = false; window.yonie.release('left'); setMode('', '');
+        } else if (g.action === 'holdScroll' && scrollMode) {
+          scrollMode = false; setMode('', '');
+        }
+      }
+      g.state.was = false;
+      continue;
+    }
+
+    const thr = parseFloat(g.thrEl.value);
+    let active = score > thr;
+
+    // Extra guard for winks: the "closed" eye must really be closed (>0.45),
+    // and the "open" eye must be reasonably open (<0.55). This prevents misfires
+    // on full blinks, head turns and side-glances.
+    if (g.key === 'winkL') active = active && blinkL > 0.45 && blinkR < 0.55;
+    if (g.key === 'winkR') active = active && blinkR > 0.45 && blinkL < 0.55;
+
+    const wasActive = g.state.was;
+
+    // Hysteresis for hold-style gestures: once active, stay active until score
+    // drops well below the threshold AND the absolute closed-eye check relaxes.
+    // This prevents flicker while the user tilts their head with one eye closed.
+    if ((g.action === 'holdDrag' || g.action === 'holdScroll') && wasActive) {
+      const exitThr = thr * 0.4;
+      let stillHeld = score > exitThr;
+      if (g.key === 'winkL') stillHeld = stillHeld && blinkL > 0.30;
+      if (g.key === 'winkR') stillHeld = stillHeld && blinkR > 0.30;
+      active = stillHeld;
+    }
+
+    g.state.was = active;
+
+    if (g.action === 'holdDrag' || g.action === 'holdScroll') {
+      // Hold-style: react to edges in both directions, no debounce.
+      if (active && !wasActive) {
+        if (g.action === 'holdDrag') {
+          if (!dragActive) {
+            dragActive = true;
+            window.yonie.press('left');
+            setMode('🖱 DRAG', 'drag');
+          }
+        } else { // holdScroll
+          if (!scrollMode) {
+            scrollMode = true;
+            setMode('↕ SCROLL', 'scroll');
+          }
+        }
+      } else if (!active && wasActive) {
+        if (g.action === 'holdDrag') {
+          if (dragActive) {
+            dragActive = false;
+            window.yonie.release('left');
+            setMode('', '');
+          }
+        } else {
+          if (scrollMode) {
+            scrollMode = false;
+            setMode('', '');
+          }
+        }
+      }
+      continue;
+    }
+
+    // Rising edge with debounce (700ms between fires) for tap-style gestures.
+    if (active && !wasActive && now - g.state.lastFireAt > 700) {
+      g.state.lastFireAt = now;
+      fireGesture(g.action, now);
+    }
+  }
+}
+
+function setMode(label, cls) {
+  if (!modeIndicatorEl) return;
+  modeIndicatorEl.className = 'badge';
+  if (label) {
+    modeIndicatorEl.classList.add('show', cls);
+    modeIndicatorEl.textContent = label;
+  } else {
+    modeIndicatorEl.textContent = '';
+  }
+}
+
+function clickAtAnchor(button = 'left', double = false) {
+  // Anchor to position ~180ms before the gesture (before any face-wobble).
+  const anchorT = performance.now() - 180;
+  let anchor = posHistory[0] || (smoothed ? { x: smoothed.x, y: smoothed.y } : null);
+  if (!anchor) return;
+  for (const p of posHistory) { if (p.t <= anchorT) anchor = p; else break; }
+
+  window.yonie.moveCursor(anchor.x, anchor.y).then(() => {
+    if (double) window.yonie.doubleClick(button);
+    else        window.yonie.click(button);
+  });
+  freezeUntil = performance.now() + 450;
+  smoothed = { x: anchor.x, y: anchor.y };
+  lastMovePos = { x: anchor.x, y: anchor.y };
+}
+
+function fireGesture(action, now) {
+  switch (action) {
+    case 'click':       clickAtAnchor('left', false);  break;
+    case 'rightClick':  clickAtAnchor('right', false); break;
+    case 'doubleClick': clickAtAnchor('left', true);   break;
+    // holdDrag / holdScroll handled in handleGestures (edge-based, not rising-edge)
+  }
+}
+
+// -------------------- UI: cursor control --------------------
+toggleBtn.addEventListener('click', async () => {
+  controlEnabled = !controlEnabled;
+  await window.yonie.setControlEnabled(controlEnabled);
+  toggleBtn.classList.toggle('active', controlEnabled);
+  toggleBtn.textContent = controlEnabled ? '⏸ Остановить управление' : '▶ Включить управление курсором';
+  if (!controlEnabled) {
+    // Safety: release any held mouse button and exit modal modes when control is disabled.
+    if (dragActive) { try { await window.yonie.release('left'); } catch {} dragActive = false; }
+    scrollMode = false;
+    setMode('', '');
+  }
+  if (controlEnabled && !calibCenter) {
+    statusEl.textContent = 'Сначала откалибруйте центр (🎯).';
+  }
+});
+
+calibrateBtn.addEventListener('click', () => {
+  if (!faceLandmarker || !video.videoWidth) return;
+  const result = faceLandmarker.detectForVideo(video, performance.now() + 0.001);
+  if (!result.faceLandmarks || !result.faceLandmarks.length) {
+    statusEl.textContent = 'Лицо не найдено. Подвиньтесь к камере.';
+    return;
+  }
+  const lm = result.faceLandmarks[0];
+  if (trackerSel.value === 'eyes') {
+    const a = lm[33], b = lm[263];
+    calibCenter = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  } else {
+    calibCenter = { x: lm[1].x, y: lm[1].y };
+  }
+  smoothed = null;
+  statusEl.textContent = 'Откалибровано. Двигайте головой — курсор будет следовать.';
+  persistSoon(); // save calibCenter so next launch auto-starts hands-free.
+});
+
+document.querySelectorAll('.help button[data-pane]').forEach((b) => {
+  b.addEventListener('click', () => window.yonie.openSystemSettings(b.dataset.pane));
+});
+
+// -------------------- Voice typing --------------------
+let recognition = null;
+let mediaRecorder = null;
+let recChunks = [];
+let voiceActive = false;
+
+// Local Whisper state
+let audioCtx = null;
+let micStream = null;
+let micSource = null;
+let micProcessor = null;
+let pcmBuffer = []; // Float32 chunks at 16 kHz
+let vad = { speakingSince: 0, silenceSince: 0, lastSampleAt: 0, voiced: false, gateMs: 0 };
+const continuousVoiceEl = document.getElementById('continuousVoice');
+
+voiceBtn.addEventListener('click', async () => {
+  if (voiceActive) { stopVoice(); return; }
+  const eng = voiceEngineEl.value;
+  if (eng === 'local')      await startLocalWhisper();
+  else if (eng === 'whisper') await startWhisper();
+  else                        startWebSpeech();
+});
+
+function setVoiceUI(on) {
+  voiceActive = on;
+  voiceBtn.classList.toggle('active', on);
+  voiceBtn.textContent = on ? '⏹ Остановить голос' : '🎙 Начать голосовой ввод';
+}
+
+function startWebSpeech() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    appendTranscript('[Web Speech API недоступен в этой сборке Electron. Переключитесь на Local Whisper]\n');
+    return;
+  }
+  recognition = new SR();
+  recognition.lang = voiceLangEl.value;
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.onresult = (ev) => {
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const res = ev.results[i];
+      if (res.isFinal) {
+        const text = res[0].transcript.trim();
+        if (text) {
+          appendTranscript(text + ' ');
+          typeOrCommand(text + ' ');
+        }
+      }
+    }
+  };
+  recognition.onerror = (e) => appendTranscript(`[ошибка распознавания: ${e.error}]\n`);
+  recognition.onend = () => { if (voiceActive) recognition.start(); };
+  try {
+    recognition.start();
+    setVoiceUI(true);
+  } catch (e) {
+    appendTranscript(`[не удалось запустить: ${e.message}]\n`);
+  }
+}
+
+async function startWhisper() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+    recChunks = [];
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      if (!recChunks.length) return;
+      const blob = new Blob(recChunks, { type: 'audio/webm' });
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const b64 = bufferToBase64(buf);
+      appendTranscript('[отправляю в OpenAI Whisper…]\n');
+      const r = await window.yonie.whisper(b64, 'audio/webm', voiceLangEl.value.split('-')[0]);
+      if (r.ok) {
+        appendTranscript(r.text + '\n');
+        if (r.text) await typeOrCommand(r.text + ' ');
+      } else {
+        appendTranscript(`[Whisper ошибка: ${r.reason}]\n`);
+      }
+    };
+    mediaRecorder.start();
+    setVoiceUI(true);
+  } catch (e) {
+    appendTranscript(`[микрофон недоступен: ${e.message}]\n`);
+  }
+}
+
+// ---- Local Whisper (whisper.cpp via main process) ---------------------------------
+
+async function startLocalWhisper() {
+  // Check that the binary + model are present.
+  const st = await window.yonie.whisperStatus();
+  if (!st.ok) {
+    if (!st.cli) {
+      appendTranscript('[Local Whisper: не найден whisper-cli. Установите: brew install whisper-cpp]\n');
+    } else {
+      appendTranscript(`[Local Whisper: модель не найдена (${st.modelPath}). Запустите: npm run setup]\n`);
+    }
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    // AudioContext at 16 kHz so the browser auto-resamples for us.
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    micSource = audioCtx.createMediaStreamSource(micStream);
+    // ScriptProcessorNode is deprecated but works reliably in Electron Chromium.
+    micProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+    micSource.connect(micProcessor);
+    micProcessor.connect(audioCtx.destination);
+
+    pcmBuffer = [];
+    vad = { speakingSince: 0, silenceSince: 0, lastSampleAt: performance.now(), voiced: false, gateMs: 0 };
+    const continuous = continuousVoiceEl?.checked;
+
+    // VAD parameters
+    const SILENCE_RMS = 0.012;     // below this is "silent"
+    const VOICE_RMS = 0.022;       // above this counts as voiced
+    const MIN_UTTER_MS = 350;      // minimum speech length to bother transcribing
+    const SILENCE_TAIL_MS = 700;   // close utterance after this much trailing silence
+    const MAX_UTTER_MS = 12000;    // hard cap per chunk
+
+    micProcessor.onaudioprocess = (ev) => {
+      const data = ev.inputBuffer.getChannelData(0);
+      // Always accumulate (we'll trim later on flush).
+      pcmBuffer.push(new Float32Array(data));
+
+      // Compute RMS for VAD.
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+      const rms = Math.sqrt(sum / data.length);
+      const now = performance.now();
+      const dtMs = (data.length / 16000) * 1000;
+      vad.lastSampleAt = now;
+
+      if (continuous) {
+        if (rms > VOICE_RMS) {
+          if (!vad.voiced) { vad.voiced = true; vad.speakingSince = now - dtMs; }
+          vad.silenceSince = 0;
+        } else if (rms < SILENCE_RMS) {
+          if (vad.voiced) {
+            if (!vad.silenceSince) vad.silenceSince = now;
+            const tail = now - vad.silenceSince;
+            const dur = now - vad.speakingSince;
+            if ((tail >= SILENCE_TAIL_MS && dur >= MIN_UTTER_MS) || dur >= MAX_UTTER_MS) {
+              flushUtterance();
+            }
+          } else {
+            // No active utterance — keep buffer small (last ~600ms as pre-roll).
+            const keepSamples = Math.ceil(0.6 * 16000);
+            let total = 0;
+            for (const c of pcmBuffer) total += c.length;
+            while (total - pcmBuffer[0].length > keepSamples) {
+              total -= pcmBuffer[0].length;
+              pcmBuffer.shift();
+            }
+          }
+        }
+        // Hard cap regardless of silence.
+        if (vad.voiced && (now - vad.speakingSince) >= MAX_UTTER_MS) flushUtterance();
+      }
+    };
+
+    setVoiceUI(true);
+    appendTranscript(continuous
+      ? '[Local Whisper готов. Говорите — буду печатать после каждой паузы.]\n'
+      : '[Local Whisper: запись… нажмите ⏹, чтобы распознать.]\n');
+  } catch (e) {
+    appendTranscript(`[микрофон недоступен: ${e.message}]\n`);
+    teardownLocalWhisper();
+  }
+}
+
+let flushing = false;
+async function flushUtterance() {
+  if (flushing || !pcmBuffer.length) return;
+  flushing = true;
+
+  // Snapshot and reset buffer / VAD state.
+  const chunks = pcmBuffer;
+  pcmBuffer = [];
+  vad.voiced = false;
+  vad.speakingSince = 0;
+  vad.silenceSince = 0;
+
+  // Concatenate.
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const merged = new Float32Array(total);
+  let off = 0;
+  for (const c of chunks) { merged.set(c, off); off += c.length; }
+
+  try {
+    const wav = encodeWav16k(merged);
+    const b64 = bufferToBase64(wav);
+    const lang = voiceLangEl.value.split('-')[0]; // ru / en / kk
+    const r = await window.yonie.whisperLocal(b64, lang);
+    if (r.ok && r.text) {
+      const out = r.text.replace(/\s+/g, ' ').trim();
+      if (out) {
+        appendTranscript(out + ' ');
+        await typeOrCommand(out + ' ');
+      }
+    } else if (!r.ok) {
+      appendTranscript(`[Whisper ошибка: ${r.reason}]\n`);
+    }
+  } catch (e) {
+    appendTranscript(`[ошибка отправки: ${e.message}]\n`);
+  } finally {
+    flushing = false;
+  }
+}
+
+function encodeWav16k(float32) {
+  // 16-bit PCM mono @ 16 kHz
+  const sampleRate = 16000;
+  const numSamples = float32.length;
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);          // PCM chunk size
+  view.setUint16(20, 1, true);           // PCM format
+  view.setUint16(22, 1, true);           // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true);           // block align
+  view.setUint16(34, 16, true);          // bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+  let off = 44;
+  for (let i = 0; i < numSamples; i++, off += 2) {
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Uint8Array(buffer);
+}
+
+function teardownLocalWhisper() {
+  try { micProcessor && micProcessor.disconnect(); } catch {}
+  try { micSource && micSource.disconnect(); } catch {}
+  try { audioCtx && audioCtx.close(); } catch {}
+  try { micStream && micStream.getTracks().forEach((t) => t.stop()); } catch {}
+  micProcessor = micSource = audioCtx = micStream = null;
+  pcmBuffer = [];
+}
+
+function stopVoice() {
+  if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  if (micProcessor) {
+    // Local Whisper: flush any remaining audio (non-continuous mode), then teardown.
+    const tail = pcmBuffer;
+    if (tail.length) {
+      // Force a flush as if utterance ended.
+      vad.voiced = true;
+      vad.speakingSince = performance.now() - 1000;
+      flushUtterance().finally(teardownLocalWhisper);
+    } else {
+      teardownLocalWhisper();
+    }
+  }
+  setVoiceUI(false);
+}
+
+function appendTranscript(s) {
+  transcriptEl.textContent += s;
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function bufferToBase64(bytes) {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+
+// -------------------- Hands-free UX: use mode, hot-corners, voice commands, auto-pause --------------------
+
+let lastFaceSeenAt = performance.now();
+let faceLost = false;
+let userPaused = false; // pause state explicitly toggled by user (voice/hot-corner)
+
+function effectiveControlEnabled() {
+  return controlEnabled && !userPaused && !faceLost;
+}
+
+function setStatus(text, dotClass) {
+  if (statusEl) statusEl.textContent = text;
+  if (compactText) compactText.textContent = text;
+  if (compactDot) {
+    compactDot.classList.remove('ok', 'warn', 'err');
+    if (dotClass) compactDot.classList.add(dotClass);
+  }
+  // Update the header status pill (new design).
+  const pill = document.getElementById('statusPill');
+  if (pill) {
+    pill.classList.remove('ok', 'warn', 'err');
+    if (dotClass) pill.classList.add(dotClass);
+  }
+  // Update camera card glow.
+  const camWrap = document.getElementById('camWrap');
+  if (camWrap) {
+    camWrap.classList.remove('face-ok', 'face-lost');
+    if (faceLost)        camWrap.classList.add('face-lost');
+    else if (diag.faceFrames > 0 && !userPaused) camWrap.classList.add('face-ok');
+  }
+  // Build mode badge for both compact widget and the floating bar window.
+  let modeCls = '', modeText = '';
+  if (userPaused)        { modeCls = 'paused'; modeText = '⏸ ПАУЗА'; }
+  else if (scrollMode)   { modeCls = 'scroll'; modeText = '↕ SCROLL'; }
+  else if (dragActive)   { modeCls = 'drag';   modeText = '🖱 DRAG'; }
+  else if (faceLost)     { modeCls = '';       modeText = '👤❌ нет лица'; }
+
+  if (compactMode) {
+    compactMode.className = 'compact-badge ' + modeCls;
+    compactMode.textContent = modeText;
+  }
+  // Broadcast to the always-on-top bar window.
+  try { window.yonie.barStatus({ text, dot: dotClass || '', mode: modeCls, modeText }); } catch {}
+}
+
+// ---- Use mode toggle (hide settings window; floating bar stays visible) ----
+function enterUseMode(silent) {
+  // Settings window hides; floating bar always remains visible at the bottom of the screen.
+  if (compactEl) compactEl.hidden = true; // legacy in-window widget no longer used
+  window.yonie.windowSetMode('compact');  // → main process hides mainWindow
+  if (!silent) persistSoon();
+  setStatus(controlEnabled ? 'Управление активно' : 'Готово', controlEnabled ? 'ok' : 'warn');
+}
+function exitUseMode() {
+  if (compactEl) compactEl.hidden = true;
+  window.yonie.windowSetMode('normal');
+  persistSoon();
+}
+if (useModeBtn) useModeBtn.addEventListener('click', () => enterUseMode(false));
+const exitUseModeBtn = document.getElementById('exitUseMode');
+if (exitUseModeBtn) exitUseModeBtn.addEventListener('click', () => exitUseMode());
+
+// ---- Auto-pause when face is lost ----
+function noteFaceSeen() { lastFaceSeenAt = performance.now(); if (faceLost) { faceLost = false; setStatus('Лицо снова в кадре', 'ok'); } }
+function checkFaceLoss() {
+  if (!autoPauseEl?.checked) { faceLost = false; return; }
+  const since = performance.now() - lastFaceSeenAt;
+  if (since > 2000 && !faceLost) {
+    faceLost = true;
+    // Release any held mouse button so we don't get stuck.
+    if (dragActive) { dragActive = false; window.yonie.release('left'); }
+    setMode('', '');
+    const reason = (video.videoWidth === 0)
+      ? 'нет видео-потока (камера занята другим приложением?)'
+      : (diag.detectErrors > 0 && lastDetectError)
+        ? `ошибка MediaPipe: ${lastDetectError.message}`
+        : 'лицо вне кадра';
+    setStatus('Авто-пауза: ' + reason, 'warn');
+  }
+}
+setInterval(checkFaceLoss, 500);
+
+// ---- Hot-corners (cursor in screen corners → app actions) ----
+let cornerDwell = { which: null, since: 0 };
+function checkHotCorners(now, x, y) {
+  if (!hotCornersEl?.checked || !smoothed) return;
+  const sw = bootstrap.screen.width, sh = bootstrap.screen.height;
+  const M = 30;
+  let which = null;
+  if (x > sw - M && y < M) which = 'TR';
+  else if (x < M && y < M) which = 'TL';
+  else if (x > sw - M && y > sh - M) which = 'BR';
+  else if (x < M && y > sh - M) which = 'BL';
+  if (which !== cornerDwell.which) cornerDwell = { which, since: now };
+  if (which && now - cornerDwell.since > 1200) {
+    cornerDwell = { which: null, since: 0 };
+    fireCorner(which);
+  }
+}
+async function fireCorner(which) {
+  switch (which) {
+    case 'TR': window.yonie.windowShow(); exitUseMode(); break;       // bring app forward
+    case 'TL': togglePause(); break;                                   // pause/resume
+    case 'BR': // emergency stop everything
+      userPaused = true;
+      if (dragActive) { dragActive = false; await window.yonie.release('left'); }
+      scrollMode = false;
+      setMode('', '');
+      setStatus('🛑 Аварийная пауза (правый-нижний угол)', 'err');
+      break;
+    case 'BL': /* reserved */ break;
+  }
+}
+function togglePause() {
+  userPaused = !userPaused;
+  if (userPaused) {
+    if (dragActive) { dragActive = false; window.yonie.release('left'); }
+    scrollMode = false;
+    setMode('', '');
+    setStatus('⏸ Пауза', 'warn');
+  } else {
+    setStatus('▶ Управление активно', 'ok');
+  }
+}
+
+// ---- Voice commands ----
+const VOICE_COMMANDS = {
+  pause:        [/^\s*пауза\b/i,        /^\s*стоп\b/i,        /^\s*остановись\b/i,  /^\s*pause\b/i,  /^\s*stop\b/i],
+  resume:       [/^\s*продолж/i,        /^\s*продолж/i,        /^\s*старт\b/i,        /^\s*resume\b/i, /^\s*start\b/i],
+  recalibrate:  [/^\s*калибровк/i,      /^\s*центр\b/i,        /^\s*recalibrate\b/i, /^\s*center\b/i],
+  click:        [/^\s*клик\s*$/i,       /^\s*нажми\s*$/i,      /^\s*click\s*$/i],
+  rightClick:   [/^\s*правый клик/i,    /^\s*правая кнопка/i,  /^\s*right click/i],
+  doubleClick:  [/^\s*двойной клик/i,   /^\s*двойной\s*$/i,    /^\s*double click/i],
+  scrollUp:     [/^\s*вверх\b/i,        /^\s*scroll up/i],
+  scrollDown:   [/^\s*вниз\b/i,         /^\s*scroll down/i],
+  enter:        [/^\s*ввод\s*$/i,       /^\s*энтер\s*$/i,      /^\s*enter\s*$/i,    /^\s*return\s*$/i],
+  delete:       [/^\s*удали\s*$/i,      /^\s*стереть\s*$/i,    /^\s*бэкспейс\s*$/i, /^\s*backspace\s*$/i, /^\s*delete\s*$/i],
+  space:        [/^\s*пробел\s*$/i,     /^\s*space\s*$/i],
+  showWindow:   [/^\s*покажи окно/i,    /^\s*настройки\b/i,    /^\s*show settings/i],
+  quit:         [/^\s*вы(йти|ход)\b/i,  /^\s*закрой\b/i,       /^\s*quit\b/i,       /^\s*exit\b/i],
+};
+
+// Returns the command name if matched, else null.
+function parseVoiceCommand(text) {
+  const t = (text || '').trim();
+  if (!t) return null;
+  for (const [name, regs] of Object.entries(VOICE_COMMANDS)) {
+    for (const r of regs) if (r.test(t)) return name;
+  }
+  return null;
+}
+
+async function executeVoiceCommand(cmd) {
+  appendTranscript(`[команда: ${cmd}]\n`);
+  switch (cmd) {
+    case 'pause':       userPaused = true;  setStatus('⏸ Пауза (голос)', 'warn'); break;
+    case 'resume':      userPaused = false; setStatus('▶ Продолжаю', 'ok'); break;
+    case 'recalibrate': calibrateBtn.click(); break;
+    case 'click':       window.yonie.click('left'); break;
+    case 'rightClick':  window.yonie.click('right'); break;
+    case 'doubleClick': window.yonie.doubleClick('left'); break;
+    case 'scrollUp':    window.yonie.scroll(0, -5); break;
+    case 'scrollDown':  window.yonie.scroll(0, 5); break;
+    case 'enter':       window.yonie.pressKey('Enter'); break;
+    case 'delete':      window.yonie.pressKey('Backspace'); break;
+    case 'space':       window.yonie.pressKey('Space'); break;
+    case 'showWindow':  window.yonie.windowShow(); exitUseMode(); break;
+    case 'quit':        window.yonie.quit(); break;
+  }
+}
+
+// Hook the voice command parser into the typing pipeline.
+// IMPORTANT: window.yonie is frozen (contextBridge), so we cannot mutate it.
+// Instead, all voice paths call typeOrCommand() which checks for a command first.
+async function typeOrCommand(text) {
+  if (voiceCommandsEl?.checked) {
+    const cmd = parseVoiceCommand(text);
+    if (cmd) {
+      await executeVoiceCommand(cmd);
+      return { ok: true, command: cmd };
+    }
+  }
+  return window.yonie.typeText(text);
+}
+
+// ---- Auto-start (hands-free boot) ----
+async function autoStartAll() {
+  if (!controlEnabled) {
+    // Re-use the same path as clicking the toggle button.
+    toggleBtn.click();
+  }
+  // Auto-start voice in continuous local-whisper mode if available.
+  if (!voiceActive && bootstrap.hasLocalWhisper) {
+    voiceEngineEl.value = 'local';
+    if (continuousVoiceEl) continuousVoiceEl.checked = true;
+    voiceBtn.click();
+  }
+  setStatus('▶ Автозапуск: всё активно', 'ok');
+}
+
+// ---- Wire face-detection + hot-corner check into the existing tick loop ----
+// Monkey-patch handleFace to add face-presence + hot-corner logic on top of cursor/gestures.
+const _origHandleFace = handleFace;
+handleFace = function (result, now) {
+  noteFaceSeen();
+  if (userPaused || faceLost) return; // block movement & gestures, but keep face detection alive
+  _origHandleFace.call(this, result, now);
+  if (smoothed) checkHotCorners(now, smoothed.x, smoothed.y);
+};
+(async () => {
+  try {
+    await initFaceLandmarker();
+    await initCamera();
+    running = true;
+    diag.startedAt = performance.now();
+    startLoop();
+
+    // Self-diagnose: if after 5s the camera/MediaPipe didn't produce anything, say why.
+    setTimeout(() => {
+      const info = diagnose();
+      console.log('[yonie] diagnose:', info);
+      if (diag.frames === 0) {
+        statusEl.textContent =
+          `❌ Камера не отдаёт кадры (videoWidth=${info.videoW}, readyState=${info.ready}). ` +
+          `Открыта ли камера в другом приложении? Проверь System Settings → Camera.`;
+      } else if (diag.faceFrames === 0) {
+        statusEl.textContent =
+          `⚠ Кадры идут (${diag.frames}/5с), но лицо не найдено. ` +
+          `Освещение/позиция перед камерой? detectErrors=${diag.detectErrors}` +
+          (lastDetectError ? ` (${lastDetectError.message})` : '');
+      } else {
+        statusEl.textContent = `✓ Работает: ${diag.faceFrames}/${diag.frames} кадров с лицом за 5с (${mpDelegate}).`;
+      }
+    }, 5000);
+  } catch (e) {
+    statusEl.textContent = 'Ошибка инициализации: ' + e.message;
+    console.error(e);
+  }
+})();
+
+// Public diagnostic helper — call yonieDiag() from DevTools console.
+function diagnose() {
+  return {
+    videoW: video.videoWidth,
+    videoH: video.videoHeight,
+    ready: video.readyState,
+    streamActive: !!(currentStream && currentStream.active),
+    tracks: currentStream ? currentStream.getVideoTracks().map((t) => ({
+      label: t.label, enabled: t.enabled, muted: t.muted, readyState: t.readyState,
+    })) : [],
+    faceLandmarker: !!faceLandmarker,
+    delegate: mpDelegate,
+    running, controlEnabled, calibCenter, faceLost, userPaused,
+    frames: diag.frames, faceFrames: diag.faceFrames,
+    detectErrors: diag.detectErrors,
+    lastDetectError: lastDetectError ? lastDetectError.message : null,
+  };
+}
+window.yonieDiag = diagnose;
+
+// ---- Live UI chips (delegate / fps / face) ----
+let lastChipFrames = 0, lastChipFaceFrames = 0, lastChipAt = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const dt = (now - lastChipAt) / 1000;
+  const fps     = Math.round((diag.frames     - lastChipFrames)     / dt);
+  const faceFps = Math.round((diag.faceFrames - lastChipFaceFrames) / dt);
+  lastChipFrames = diag.frames;
+  lastChipFaceFrames = diag.faceFrames;
+  lastChipAt = now;
+
+  const cd = document.getElementById('chipDelegate');
+  const cf = document.getElementById('chipFps');
+  const cF = document.getElementById('chipFace');
+  if (cd) cd.textContent = `⚙️ ${mpDelegate || '—'}`;
+  if (cf) cf.textContent = video.videoWidth
+    ? `📷 ${video.videoWidth}×${video.videoHeight} · ${fps}fps`
+    : '📷 нет потока';
+  if (cF) cF.textContent = faceFps > 0 ? `🙂 лицо ${faceFps}/с` : '😶 нет лица';
+
+  // Keep camera card glow in sync even between explicit setStatus() calls.
+  const camWrap = document.getElementById('camWrap');
+  if (camWrap) {
+    camWrap.classList.remove('face-ok', 'face-lost');
+    if (faceLost)             camWrap.classList.add('face-lost');
+    else if (faceFps > 0 && !userPaused) camWrap.classList.add('face-ok');
+  }
+}, 1000);
+
