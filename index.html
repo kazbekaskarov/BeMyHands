@@ -15,10 +15,10 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/index.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" />
   <link rel="stylesheet" href="styles.css" />
+  <script src="i18n.js"></script>
 </head>
 <body>
 
-<!-- ====================== SVG SPRITES ====================== -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="i-cursor" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M5 3l5.5 16 2-7 7-2L5 3z"/></symbol>
@@ -35,71 +35,73 @@
 </svg>
 
 <div class="app">
-
-  <!-- ====================== SIDEBAR ====================== -->
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9 2.5a1.5 1.5 0 013 0V11h.5V4a1.5 1.5 0 013 0v7h.5V6.5a1.5 1.5 0 013 0V14a7 7 0 11-14 0V8a1.5 1.5 0 013 0V11H9V2.5z"/></svg>
       </div>
       <div class="brand-name">
-        <div>BeMyHands</div>
-        <small>face &amp; voice control</small>
+        <div data-i18n="app.title">BeMyHands</div>
+        <small data-i18n="app.subtitle">face &amp; voice control</small>
       </div>
     </div>
 
     <nav class="nav" id="nav">
-      <a class="nav-item" data-section="overview"><svg class="ico"><use href="#i-target"/></svg><span>Обзор</span></a>
-      <a class="nav-item" data-section="cursor"><svg class="ico"><use href="#i-cursor"/></svg><span>Курсор</span></a>
-      <a class="nav-item" data-section="gestures"><svg class="ico"><use href="#i-face"/></svg><span>Жесты</span></a>
-      <a class="nav-item" data-section="voice"><svg class="ico"><use href="#i-mic"/></svg><span>Голос</span></a>
-      <a class="nav-item" data-section="handsfree"><svg class="ico"><use href="#i-zap"/></svg><span>Hands-free</span></a>
-      <a class="nav-item" data-section="permissions"><svg class="ico"><use href="#i-shield"/></svg><span>Разрешения</span></a>
+      <a class="nav-item" data-section="overview"><svg class="ico"><use href="#i-target"/></svg><span data-i18n="nav.overview">Обзор</span></a>
+      <a class="nav-item" data-section="cursor"><svg class="ico"><use href="#i-cursor"/></svg><span data-i18n="nav.cursor">Курсор</span></a>
+      <a class="nav-item" data-section="gestures"><svg class="ico"><use href="#i-face"/></svg><span data-i18n="nav.gestures">Жесты</span></a>
+      <a class="nav-item" data-section="voice"><svg class="ico"><use href="#i-mic"/></svg><span data-i18n="nav.voice">Голос</span></a>
+      <a class="nav-item" data-section="handsfree"><svg class="ico"><use href="#i-zap"/></svg><span data-i18n="nav.handsfree">Hands-free</span></a>
+      <a class="nav-item" data-section="permissions"><svg class="ico"><use href="#i-shield"/></svg><span data-i18n="nav.permissions">Разрешения</span></a>
     </nav>
 
     <div class="sidebar-foot">
-      <div class="status-pill" id="statusPill" title="Текущее состояние">
-        <span class="pulse"></span>
-        <span id="status">Загрузка…</span>
+      <div class="lang-switch" role="group" aria-label="Language" id="langSwitch">
+        <span class="lang-thumb" aria-hidden="true"></span>
+        <button data-lang="ru" class="lang-btn"><span class="flag">🇷🇺</span><span class="lbl">RU</span></button>
+        <button data-lang="en" class="lang-btn"><span class="flag">🇬🇧</span><span class="lbl">EN</span></button>
+        <button data-lang="kk" class="lang-btn"><span class="flag">🇰🇿</span><span class="lbl">KZ</span></button>
+        <button data-lang="tr" class="lang-btn"><span class="flag">🇹🇷</span><span class="lbl">TR</span></button>
       </div>
-      <button id="useMode" class="btn btn-primary btn-block" title="Скрыть окно — останется только тонкая полоса сверху">
+      <div class="status-pill" id="statusPill">
+        <span class="pulse"></span>
+        <span id="status" data-i18n="status.loading">Загрузка…</span>
+      </div>
+      <button id="useMode" class="btn btn-primary btn-block" data-i18n-title="status.use_mode_hint">
         <svg class="ico"><use href="#i-mini"/></svg>
-        <span>Режим использования</span>
+        <span data-i18n="status.use_mode">Режим использования</span>
       </button>
     </div>
   </aside>
 
-  <!-- ====================== MAIN ====================== -->
   <main class="main">
 
-    <!-- ============ OVERVIEW ============ -->
     <section id="s-overview" class="section">
       <header class="section-head">
         <div>
-          <div class="eyebrow">Обзор</div>
-          <h1>Управляйте Mac движениями лица и голосом</h1>
-          <p>Камера и микрофон обрабатываются локально. Калибруйтесь, включайте управление и работайте без рук.</p>
+          <div class="eyebrow" data-i18n="overview.eyebrow">Обзор</div>
+          <h1 data-i18n="overview.title">Управляйте Mac движениями лица и голосом</h1>
+          <p data-i18n="overview.lede">Камера и микрофон обрабатываются локально.</p>
         </div>
         <div class="head-actions">
           <button id="toggleControl" class="btn btn-primary btn-lg">
             <svg class="ico"><use href="#i-play"/></svg>
-            <span>Включить управление</span>
+            <span data-i18n="overview.start">Включить управление</span>
           </button>
           <button id="calibrate" class="btn">
             <svg class="ico"><use href="#i-target"/></svg>
-            <span>Калибровать</span>
+            <span data-i18n="overview.calib">Калибровать</span>
           </button>
           <span id="modeIndicator" class="mode-badge"></span>
         </div>
       </header>
 
       <div class="overview-grid">
-        <!-- Camera card (hero) -->
         <div class="card card-camera">
           <div class="card-head">
             <div class="card-title">
               <svg class="ico"><use href="#i-camera"/></svg>
-              <span>Камера</span>
+              <span data-i18n="cam.title">Камера</span>
             </div>
             <div class="cam-meta">
               <span class="chip" id="chipDelegate">—</span>
@@ -112,61 +114,63 @@
             <canvas id="overlay"></canvas>
           </div>
           <ol class="hint">
-            <li>Сядьте лицом к камере, голова в нейтральной позе.</li>
-            <li>Нажмите <b>Калибровать</b> — это становится «центром».</li>
-            <li>Включите управление и двигайте головой, чтобы вести курсор.</li>
+            <li data-i18n="cam.step1">Сядьте лицом к камере.</li>
+            <li>
+              <span data-i18n="cam.step2_a">Нажмите</span>
+              <b data-i18n="overview.calib">Калибровать</b>
+              <span data-i18n="cam.step2_b">— это становится «центром».</span>
+            </li>
+            <li data-i18n="cam.step3">Включите управление и двигайте головой.</li>
           </ol>
         </div>
 
-        <!-- Quick stats -->
         <div class="stack">
           <div class="card stat">
-            <div class="stat-label">Состояние</div>
+            <div class="stat-label" data-i18n="stat.state">Состояние</div>
             <div class="stat-value" id="stat-state">—</div>
-            <div class="stat-sub">cursor · gestures · voice</div>
+            <div class="stat-sub" data-i18n="stat.state_sub">cursor · gestures · voice</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Производительность</div>
+            <div class="stat-label" data-i18n="stat.perf">Производительность</div>
             <div class="stat-value mono" id="stat-fps">—</div>
-            <div class="stat-sub">кадров с лицом / секунду</div>
+            <div class="stat-sub" data-i18n="stat.perf_sub">кадров с лицом / секунду</div>
           </div>
           <div class="card stat">
-            <div class="stat-label">Модель</div>
+            <div class="stat-label" data-i18n="stat.model">Модель</div>
             <div class="stat-value mono" id="stat-model">FaceLandmarker</div>
-            <div class="stat-sub">MediaPipe Tasks Vision</div>
+            <div class="stat-sub" data-i18n="stat.model_sub">MediaPipe Tasks Vision</div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ============ CURSOR ============ -->
     <section id="s-cursor" class="section">
       <header class="section-head">
         <div>
-          <div class="eyebrow">Раздел</div>
-          <h2>Курсор</h2>
-          <p>Источник позиции и поведение по умолчанию.</p>
+          <div class="eyebrow" data-i18n="sec.section">Раздел</div>
+          <h2 data-i18n="cursor.title">Курсор</h2>
+          <p data-i18n="cursor.lede">Источник позиции и поведение по умолчанию.</p>
         </div>
       </header>
       <div class="card">
         <div class="grid-2">
           <div class="field">
-            <label for="tracker">Источник позиции</label>
+            <label for="tracker" data-i18n="cursor.source">Источник позиции</label>
             <select id="tracker">
-              <option value="nose" selected>Нос — стабильнее</option>
-              <option value="eyes">Между глаз</option>
+              <option value="nose" selected data-i18n="cursor.source_nose">Нос — стабильнее</option>
+              <option value="eyes" data-i18n="cursor.source_eyes">Между глаз</option>
             </select>
           </div>
           <div class="field">
-            <label for="smooth">Сглаживание <span class="value-hint">EMA</span></label>
+            <label for="smooth"><span data-i18n="cursor.smooth">Сглаживание</span> <span class="value-hint">EMA</span></label>
             <input id="smooth" type="range" min="0" max="0.95" step="0.05" value="0.7" />
           </div>
           <div class="field">
-            <label for="sensX">Чувствительность X</label>
+            <label for="sensX" data-i18n="cursor.sens_x">Чувствительность X</label>
             <input id="sensX" type="range" min="1" max="6" step="0.1" value="2.6" />
           </div>
           <div class="field">
-            <label for="sensY">Чувствительность Y</label>
+            <label for="sensY" data-i18n="cursor.sens_y">Чувствительность Y</label>
             <input id="sensY" type="range" min="1" max="6" step="0.1" value="2.6" />
           </div>
         </div>
@@ -174,182 +178,178 @@
         <label class="check">
           <input id="dwellClick" type="checkbox" />
           <span>
-            <b>Dwell-клик</b>
-            <small>Левый клик после 1.2 с без движения курсора.</small>
+            <b data-i18n="cursor.dwell_t">Dwell-клик</b>
+            <small data-i18n="cursor.dwell_d">Левый клик после 1.2 с без движения курсора.</small>
           </span>
         </label>
       </div>
     </section>
 
-    <!-- ============ GESTURES ============ -->
     <section id="s-gestures" class="section">
       <header class="section-head">
         <div>
-          <div class="eyebrow">Раздел</div>
-          <h2>Жесты лицом</h2>
-          <p>Каждый жест → действие. Полоса справа — текущая «уверенность» модели.</p>
+          <div class="eyebrow" data-i18n="sec.section">Раздел</div>
+          <h2 data-i18n="gest.title">Жесты лицом</h2>
+          <p data-i18n="gest.lede">Каждый жест → действие.</p>
         </div>
       </header>
       <div class="card no-pad">
         <div class="gesture-row gesture-head">
-          <div>Жест</div><div>Действие</div><div>Порог</div><div>Сейчас</div>
+          <div data-i18n="gest.h_gesture">Жест</div>
+          <div data-i18n="gest.h_action">Действие</div>
+          <div data-i18n="gest.h_threshold">Порог</div>
+          <div data-i18n="gest.h_now">Сейчас</div>
         </div>
 
         <div class="gesture-row">
           <div class="gesture-name">
-            <label class="check inline"><input type="checkbox" id="g_mouth" checked /><span>Открыть рот</span></label>
+            <label class="check inline"><input type="checkbox" id="g_mouth" checked /><span data-i18n="gest.mouth">Открыть рот</span></label>
           </div>
-          <div class="gesture-action">Левый клик</div>
+          <div class="gesture-action" data-i18n="gest.mouth_act">Левый клик</div>
           <div><input type="range" id="g_mouth_t" min="0.15" max="0.7" step="0.01" value="0.35" /></div>
           <div><span class="bar" id="g_mouth_v">0.00</span></div>
         </div>
         <div class="gesture-row">
           <div class="gesture-name">
-            <label class="check inline"><input type="checkbox" id="g_brow" checked /><span>Поднять брови</span></label>
+            <label class="check inline"><input type="checkbox" id="g_brow" checked /><span data-i18n="gest.brow">Поднять брови</span></label>
           </div>
-          <div class="gesture-action">Правый клик</div>
+          <div class="gesture-action" data-i18n="gest.brow_act">Правый клик</div>
           <div><input type="range" id="g_brow_t" min="0.20" max="0.80" step="0.01" value="0.45" /></div>
           <div><span class="bar" id="g_brow_v">0.00</span></div>
         </div>
         <div class="gesture-row">
           <div class="gesture-name">
-            <label class="check inline"><input type="checkbox" id="g_smile" checked /><span>Улыбнуться</span></label>
+            <label class="check inline"><input type="checkbox" id="g_smile" checked /><span data-i18n="gest.smile">Улыбнуться</span></label>
           </div>
-          <div class="gesture-action">Двойной клик</div>
+          <div class="gesture-action" data-i18n="gest.smile_act">Двойной клик</div>
           <div><input type="range" id="g_smile_t" min="0.20" max="0.80" step="0.01" value="0.50" /></div>
           <div><span class="bar" id="g_smile_v">0.00</span></div>
         </div>
         <div class="gesture-row">
           <div class="gesture-name">
-            <label class="check inline"><input type="checkbox" id="g_winkL" checked /><span>Прищурить левый глаз</span></label>
+            <label class="check inline"><input type="checkbox" id="g_winkL" checked /><span data-i18n="gest.winkL">Прищурить левый глаз</span></label>
           </div>
-          <div class="gesture-action">Зажать ЛКМ <span class="tag">drag</span></div>
+          <div class="gesture-action"><span data-i18n="gest.winkL_act">Зажать ЛКМ</span> <span class="tag" data-i18n="tag.drag">drag</span></div>
           <div><input type="range" id="g_winkL_t" min="0.10" max="0.70" step="0.01" value="0.25" /></div>
           <div><span class="bar" id="g_winkL_v">0.00</span></div>
         </div>
         <div class="gesture-row">
           <div class="gesture-name">
-            <label class="check inline"><input type="checkbox" id="g_winkR" checked /><span>Прищурить правый глаз</span></label>
+            <label class="check inline"><input type="checkbox" id="g_winkR" checked /><span data-i18n="gest.winkR">Прищурить правый глаз</span></label>
           </div>
-          <div class="gesture-action">Прокрутка <span class="tag">scroll</span></div>
+          <div class="gesture-action"><span data-i18n="gest.winkR_act">Прокрутка</span> <span class="tag" data-i18n="tag.scroll">scroll</span></div>
           <div><input type="range" id="g_winkR_t" min="0.10" max="0.70" step="0.01" value="0.25" /></div>
           <div><span class="bar" id="g_winkR_v">0.00</span></div>
         </div>
 
         <div class="callout">
-          <div><b>Drag.</b> Удерживайте левый глаз закрытым — ЛКМ зажата, ведите головой. Открыли — освободилась.</div>
-          <div><b>Scroll.</b> Закройте правый глаз — наклон головы вверх/вниз прокручивает страницу.</div>
+          <div data-i18n="gest.drag"></div>
+          <div data-i18n="gest.scroll"></div>
         </div>
       </div>
     </section>
 
-    <!-- ============ VOICE ============ -->
     <section id="s-voice" class="section">
       <header class="section-head">
         <div>
-          <div class="eyebrow">Раздел</div>
-          <h2>Голосовой ввод</h2>
-          <p>Печать голосом и команды. Local Whisper работает офлайн.</p>
+          <div class="eyebrow" data-i18n="sec.section">Раздел</div>
+          <h2 data-i18n="voice.title">Голосовой ввод</h2>
+          <p data-i18n="voice.lede">Печать голосом и команды.</p>
         </div>
         <div class="head-actions">
           <button id="toggleVoice" class="btn btn-primary">
             <svg class="ico"><use href="#i-mic"/></svg>
-            <span>Начать голосовой ввод</span>
+            <span data-i18n="voice.start">Начать голосовой ввод</span>
           </button>
         </div>
       </header>
       <div class="card">
         <div class="grid-2">
           <div class="field">
-            <label for="voiceLang">Язык</label>
+            <label for="voiceLang" data-i18n="voice.lang">Язык</label>
             <select id="voiceLang">
               <option value="ru-RU" selected>Русский</option>
               <option value="en-US">English (US)</option>
               <option value="kk-KZ">Қазақша</option>
+              <option value="tr-TR">Türkçe</option>
             </select>
           </div>
           <div class="field">
-            <label for="voiceEngine">Движок</label>
+            <label for="voiceEngine" data-i18n="voice.engine">Движок</label>
             <select id="voiceEngine">
-              <option value="local" selected>Local Whisper (offline)</option>
-              <option value="webspeech">Web Speech (онлайн)</option>
-              <option value="whisper">OpenAI Whisper (.env)</option>
+              <option value="local" selected data-i18n="voice.engine_local">Local Whisper (offline)</option>
+              <option value="webspeech" data-i18n="voice.engine_web">Web Speech (онлайн)</option>
+              <option value="whisper" data-i18n="voice.engine_oai">OpenAI Whisper (.env)</option>
             </select>
           </div>
         </div>
         <label class="check">
           <input id="continuousVoice" type="checkbox" checked />
-          <span><b>Непрерывный режим</b><small>Автоматически нарезает речь по тишине и печатает фразы.</small></span>
+          <span><b data-i18n="voice.continuous_t">Непрерывный режим</b><small data-i18n="voice.continuous_d">Автоматически нарезает речь по тишине.</small></span>
         </label>
         <div class="divider"></div>
-        <div class="transcript" id="transcript" placeholder='Здесь появится распознанный текст. Команды: «клик», «пауза», «продолжи», «открой ютуб / телеграм», «найди коты в шапках».'></div>
+        <div class="transcript" id="transcript" data-i18n-placeholder="voice.transcript_ph"></div>
       </div>
     </section>
 
-    <!-- ============ HANDS-FREE ============ -->
     <section id="s-handsfree" class="section">
       <header class="section-head">
         <div>
-          <div class="eyebrow">Раздел</div>
-          <h2>Hands-free поведение</h2>
-          <p>Чтобы пользоваться без рук — даже при ошибках камеры.</p>
+          <div class="eyebrow" data-i18n="sec.section">Раздел</div>
+          <h2 data-i18n="hf.title">Hands-free поведение</h2>
+          <p data-i18n="hf.lede">Чтобы пользоваться без рук.</p>
         </div>
       </header>
       <div class="card stack-checks">
-        <label class="check"><input id="autoStart" type="checkbox" /><span><b>Автозапуск при открытии</b><small>Сразу включает управление курсором и непрерывный голос. Нужна сохранённая калибровка.</small></span></label>
-        <label class="check"><input id="autoPause" type="checkbox" checked /><span><b>Авто-пауза без лица</b><small>Если 2 секунды нет лица в кадре — управление приостанавливается.</small></span></label>
-        <label class="check"><input id="hotCorners" type="checkbox" checked /><span><b>Углы экрана</b><small>TL — пауза/возобновить · TR — показать окно · BR — аварийный стоп.</small></span></label>
-        <label class="check"><input id="voiceCommands" type="checkbox" checked /><span><b>Голосовые команды</b><small>Управление: «пауза», «клик», «вверх» · Запуск: «открой ютуб / телеграм / vs code», «найди X» · Редактор: «сохрани», «отмени», «найди», «команда», «терминал», «следующая вкладка», «назад» · Точность: «точно».</small></span></label>
+        <label class="check"><input id="autoStart" type="checkbox" /><span><b data-i18n="hf.autostart_t"></b><small data-i18n="hf.autostart_d"></small></span></label>
+        <label class="check"><input id="autoPause" type="checkbox" checked /><span><b data-i18n="hf.autopause_t"></b><small data-i18n="hf.autopause_d"></small></span></label>
+        <label class="check"><input id="hotCorners" type="checkbox" checked /><span><b data-i18n="hf.corners_t"></b><small data-i18n="hf.corners_d"></small></span></label>
+        <label class="check"><input id="voiceCommands" type="checkbox" checked /><span><b data-i18n="hf.cmds_t"></b><small data-i18n="hf.cmds_d"></small></span></label>
       </div>
     </section>
 
-    <!-- ============ PERMISSIONS ============ -->
     <section id="s-permissions" class="section">
       <header class="section-head">
         <div>
-          <div class="eyebrow">Раздел</div>
-          <h2>Разрешения macOS</h2>
-          <p>Настроили один раз — и забыли.</p>
+          <div class="eyebrow" data-i18n="sec.section">Раздел</div>
+          <h2 data-i18n="perm.title">Разрешения macOS</h2>
+          <p data-i18n="perm.lede">Настроили один раз — и забыли.</p>
         </div>
       </header>
       <div class="card help">
         <div class="perm">
           <div class="perm-head">
             <div class="perm-title">Accessibility</div>
-            <span class="tag tag-req">обязательно</span>
+            <span class="tag tag-req" data-i18n="perm.req">обязательно</span>
           </div>
-          <p>Чтобы курсор и клавиатура работали в других приложениях.</p>
-          <button class="btn" data-pane="accessibility">Открыть панель</button>
+          <p data-i18n="perm.acc_d">Чтобы курсор и клавиатура работали.</p>
+          <button class="btn" data-pane="accessibility" data-i18n="perm.open">Открыть панель</button>
         </div>
         <div class="perm">
-          <div class="perm-head">
-            <div class="perm-title">Camera</div>
-          </div>
-          <p>Для отслеживания лица локально на устройстве.</p>
-          <button class="btn" data-pane="camera">Открыть панель</button>
+          <div class="perm-head"><div class="perm-title">Camera</div></div>
+          <p data-i18n="perm.cam_d">Для отслеживания лица локально.</p>
+          <button class="btn" data-pane="camera" data-i18n="perm.open">Открыть панель</button>
         </div>
         <div class="perm">
-          <div class="perm-head">
-            <div class="perm-title">Microphone</div>
-          </div>
-          <p>Для голосового ввода и команд.</p>
-          <button class="btn" data-pane="microphone">Открыть панель</button>
+          <div class="perm-head"><div class="perm-title">Microphone</div></div>
+          <p data-i18n="perm.mic_d">Для голосового ввода.</p>
+          <button class="btn" data-pane="microphone" data-i18n="perm.open">Открыть панель</button>
         </div>
-        <p class="note">После выдачи прав <b>перезапустите приложение</b>.</p>
+        <p class="note">
+          <span data-i18n="perm.note_a"></span> <b data-i18n="perm.note_b"></b>
+        </p>
       </div>
     </section>
 
   </main>
 </div>
 
-<!-- Hidden legacy widget (renderer.js compatibility) -->
 <div id="compactWidget" hidden>
   <div><span id="compactDot"></span><span id="compactText"></span><span id="compactMode"></span></div>
   <button id="exitUseMode">← Назад в настройки</button>
 </div>
 
 <script>
-  // Sidebar nav: smooth-scroll + scroll-spy. Pure UI, doesn't touch renderer.js.
   const navItems = document.querySelectorAll('.nav-item');
   const sections = [...document.querySelectorAll('.section')];
   navItems.forEach((a) => {
@@ -369,6 +369,38 @@
   }, { rootMargin: '-25% 0px -65% 0px' });
   sections.forEach((s) => obs.observe(s));
   navItems[0]?.classList.add('active');
+
+  // Language switcher
+  const langBtns = document.querySelectorAll('.lang-btn');
+  const langSwitch = document.getElementById('langSwitch');
+  const langThumb = langSwitch?.querySelector('.lang-thumb');
+
+  function moveThumb() {
+    if (!langThumb || !langSwitch) return;
+    const active = langSwitch.querySelector('.lang-btn.active');
+    if (!active) { langThumb.style.opacity = '0'; return; }
+    const sr = langSwitch.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    langThumb.style.opacity = '1';
+    langThumb.style.width = ar.width + 'px';
+    langThumb.style.transform = `translateX(${ar.left - sr.left - 3}px)`; // 3px = container padding
+  }
+  function refreshLangActive() {
+    const cur = window.i18n?.getLang?.() || 'ru';
+    langBtns.forEach((b) => b.classList.toggle('active', b.dataset.lang === cur));
+    requestAnimationFrame(moveThumb);
+  }
+  langBtns.forEach((b) => {
+    b.addEventListener('click', () => {
+      window.i18n?.setLang?.(b.dataset.lang);
+      refreshLangActive();
+    });
+  });
+  refreshLangActive();
+  window.addEventListener('resize', moveThumb);
+  // Re-run after fonts settle so the measurement is accurate.
+  setTimeout(moveThumb, 50);
+  setTimeout(moveThumb, 400);
 </script>
 <script type="module" src="renderer.js"></script>
 </body>

@@ -4,6 +4,10 @@ import {
   FilesetResolver,
 } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 
+// Translation helper — falls back to the key itself if i18n not loaded yet.
+const t  = (k)        => (window.i18n && window.i18n.t  ? window.i18n.t(k)  : k);
+const tf = (k, p)     => (window.i18n && window.i18n.tf ? window.i18n.tf(k, p) : k);
+
 // -------------------- DOM --------------------
 const $ = (id) => document.getElementById(id);
 const video = $('video');
@@ -101,10 +105,10 @@ window.yonie.onBootstrap((b) => {
   }
   if (!b.hasLocalWhisper) {
     const opt = voiceEngineEl.querySelector('option[value="local"]');
-    opt.textContent = 'Local Whisper (нет модели/CLI — npm run setup)';
+    opt.textContent = t('d.voice_local_missing');
   } else {
     const opt = voiceEngineEl.querySelector('option[value="local"]');
-    opt.textContent = `Local Whisper (offline, ${b.whisperModel || 'large-v3'})`;
+    opt.textContent = tf('d.voice_local_ready', { model: b.whisperModel || 'large-v3' });
   }
   // Restore saved configuration (helper set this up earlier).
   applyConfig(b.config || {});
@@ -124,8 +128,7 @@ window.yonie.onBootstrap((b) => {
       autoStartAll();
       // If we didn't have calibration, nudge the user — voice may still be working.
       if (!calibCenter && statusEl) {
-        statusEl.textContent =
-          'Автозапуск активен. Для курсора нажмите 🎯 «Калибровать» в нейтральной позе.';
+        statusEl.textContent = t('d.autostart_calib');
       }
     }, 1500);
   }
@@ -154,7 +157,12 @@ function applyConfig(cfg) {
   }
   if (cfg.calibCenter && typeof cfg.calibCenter.x === 'number') {
     calibCenter = { x: cfg.calibCenter.x, y: cfg.calibCenter.y };
-    if (statusEl) statusEl.textContent = 'Сохранённая калибровка загружена.';
+    if (statusEl) statusEl.textContent = t('d.calib_loaded');
+  }
+  // Restore UI language (saved separately in localStorage by i18n.js, but we also
+  // mirror it into the main config so it travels between machines if synced).
+  if (cfg.uiLang && window.i18n) {
+    try { window.i18n.setLang(cfg.uiLang); } catch {}
   }
 }
 
@@ -183,6 +191,28 @@ for (const id of PERSISTED_CONTROLS) {
   if (el) el.addEventListener('change', persistSoon);
 }
 
+// Persist UI language whenever the user switches it.
+if (window.i18n && window.i18n.onChange) {
+  window.i18n.onChange((lang) => {
+    savedConfig = { ...savedConfig, uiLang: lang };
+    try { window.yonie.configSet(savedConfig); } catch {}
+    // Update dynamic strings that aren't covered by data-i18n.
+    setBtnLabel(toggleBtn, controlEnabled ? t('overview.stop') : t('overview.start'));
+    setBtnLabel(voiceBtn,  voiceActive    ? t('voice.stop')    : t('voice.start'));
+    // Re-render the current status line so reason/mode badges follow the new language.
+    try {
+      const pill = document.getElementById('statusPill');
+      const dot = pill && (pill.classList.contains('ok') ? 'ok'
+                : pill.classList.contains('warn') ? 'warn'
+                : pill.classList.contains('err') ? 'err' : '');
+      if (userPaused)         setStatus(t('d.paused'),  'warn');
+      else if (faceLost)      setStatus(t('d.mode_noface'), 'warn');
+      else if (controlEnabled) setStatus(t('d.ctrl_active'), 'ok');
+      else                    setStatus(t('d.ready_short'), dot || 'warn');
+    } catch {}
+  });
+}
+
 // Hands-free toggles persist *immediately* (no 300ms debounce) so closing the
 // window right after toggling autoStart still saves the new value.
 function persistNow() {
@@ -209,7 +239,7 @@ let mpDelegate = 'GPU';
 let lastDetectError = null;
 
 async function initFaceLandmarker() {
-  statusEl.textContent = 'Загружаю MediaPipe wasm…';
+  statusEl.textContent = t('d.mp_loading');
   if (!mpFileset) {
     mpFileset = await FilesetResolver.forVisionTasks(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
@@ -231,11 +261,11 @@ async function initFaceLandmarker() {
     mpDelegate = 'GPU';
   } catch (e) {
     console.warn('[MediaPipe] GPU delegate failed, fallback to CPU:', e);
-    statusEl.textContent = 'GPU не доступен, перехожу на CPU…';
+    statusEl.textContent = t('d.mp_gpu_fail');
     faceLandmarker = await FaceLandmarker.createFromOptions(mpFileset, buildOpts('CPU'));
     mpDelegate = 'CPU';
   }
-  statusEl.textContent = `Модель загружена (${mpDelegate}). Открываю камеру…`;
+  statusEl.textContent = tf('d.mp_loaded', { delegate: mpDelegate });
 }
 
 async function listCameras() {
@@ -270,8 +300,8 @@ async function initCamera() {
     }
   }
   if (!stream) {
-    const reason = lastErr ? `${lastErr.name}: ${lastErr.message}` : 'нет доступной камеры';
-    throw new Error(`Камера не открылась → ${reason}`);
+    const reason = lastErr ? `${lastErr.name}: ${lastErr.message}` : t('d.cam_no_avail');
+    throw new Error(tf('d.cam_open_fail', { reason }));
   }
 
   currentStream = stream;
@@ -286,17 +316,17 @@ async function initCamera() {
   if (track) {
     track.addEventListener('ended', () => {
       console.warn('[camera] track ended — попытка переподключения через 1с');
-      statusEl.textContent = 'Камера отключилась. Переподключаюсь…';
+      statusEl.textContent = t('d.cam_disconnect');
       currentStream = null;
       setTimeout(() => initCamera().catch((e) => {
-        statusEl.textContent = 'Не удалось переподключить камеру: ' + e.message;
+        statusEl.textContent = tf('d.cam_reconnect_fail', { msg: e.message });
       }), 1000);
     });
     track.addEventListener('mute', () => console.warn('[camera] track muted'));
     track.addEventListener('unmute', () => console.warn('[camera] track unmuted'));
   }
 
-  statusEl.textContent = `Готово (камера ${video.videoWidth}×${video.videoHeight}). Калибруйте центр (🎯).`;
+  statusEl.textContent = tf('d.cam_ready', { w: video.videoWidth, h: video.videoHeight });
 }
 
 // -------------------- Loop --------------------
@@ -610,15 +640,14 @@ toggleBtn.addEventListener('click', async () => {
   controlEnabled = !controlEnabled;
   await window.yonie.setControlEnabled(controlEnabled);
   toggleBtn.classList.toggle('active', controlEnabled);
-  setBtnLabel(toggleBtn, controlEnabled ? 'Остановить управление' : 'Включить управление');
+  setBtnLabel(toggleBtn, controlEnabled ? t('overview.stop') : t('overview.start'));
   if (!controlEnabled) {
-    // Safety: release any held mouse button and exit modal modes when control is disabled.
     if (dragActive) { try { await window.yonie.release('left'); } catch {} dragActive = false; }
     scrollMode = false;
     setMode('', '');
   }
   if (controlEnabled && !calibCenter) {
-    statusEl.textContent = 'Сначала откалибруйте центр (🎯).';
+    statusEl.textContent = t('d.calib_first');
   }
 });
 
@@ -626,7 +655,7 @@ calibrateBtn.addEventListener('click', () => {
   if (!faceLandmarker || !video.videoWidth) return;
   const result = faceLandmarker.detectForVideo(video, performance.now() + 0.001);
   if (!result.faceLandmarks || !result.faceLandmarks.length) {
-    statusEl.textContent = 'Лицо не найдено. Подвиньтесь к камере.';
+    statusEl.textContent = t('d.no_face');
     return;
   }
   const lm = result.faceLandmarks[0];
@@ -637,28 +666,26 @@ calibrateBtn.addEventListener('click', () => {
     calibCenter = { x: lm[1].x, y: lm[1].y };
   }
   smoothed = null;
-  statusEl.textContent = 'Откалибровано. Двигайте головой — курсор будет следовать.';
-  persistSoon(); // save calibCenter so next launch auto-starts hands-free.
+  statusEl.textContent = t('d.calibrated');
+  persistSoon();
 });
 
 // Voice-triggered calibration with a 3-2-1 countdown so the user has time to
 // sit upright and look straight ahead before the snapshot is taken.
 let calibrationCountdown = null;
 function voiceCalibrate() {
-  if (calibrationCountdown) return; // already counting down
-  setMode('🎯 КАЛИБРОВКА', 'precision');
+  if (calibrationCountdown) return;
+  setMode(t('d.calibration'), 'precision');
   let n = 3;
-  setStatus(`Калибровка через ${n}… смотрите прямо в камеру`, 'warn');
+  setStatus(`${t('d.calib_in')} ${n}${t('d.calib_in_look')}`, 'warn');
   calibrationCountdown = setInterval(() => {
     n -= 1;
     if (n > 0) {
-      setStatus(`Калибровка через ${n}…`, 'warn');
+      setStatus(`${t('d.calib_in')} ${n}…`, 'warn');
     } else {
       clearInterval(calibrationCountdown);
       calibrationCountdown = null;
-      // Trigger the same code path as clicking the button.
       calibrateBtn.click();
-      // Restore mode badge after the brief calibration flash.
       setTimeout(() => {
         if (!dragActive && !scrollMode && !userPaused && performance.now() >= precisionUntil) {
           setMode('', '');
@@ -698,13 +725,13 @@ voiceBtn.addEventListener('click', async () => {
 function setVoiceUI(on) {
   voiceActive = on;
   voiceBtn.classList.toggle('active', on);
-  setBtnLabel(voiceBtn, on ? 'Остановить голос' : 'Начать голосовой ввод');
+  setBtnLabel(voiceBtn, on ? t('voice.stop') : t('voice.start'));
 }
 
 function startWebSpeech() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
-    appendTranscript('[Web Speech API недоступен в этой сборке Electron. Переключитесь на Local Whisper]\n');
+    appendTranscript(t('d.webspeech_missing') + '\n');
     return;
   }
   recognition = new SR();
@@ -723,13 +750,13 @@ function startWebSpeech() {
       }
     }
   };
-  recognition.onerror = (e) => appendTranscript(`[ошибка распознавания: ${e.error}]\n`);
+  recognition.onerror = (e) => appendTranscript(tf('d.recog_err', { err: e.error }) + '\n');
   recognition.onend = () => { if (voiceActive) recognition.start(); };
   try {
     recognition.start();
     setVoiceUI(true);
   } catch (e) {
-    appendTranscript(`[не удалось запустить: ${e.message}]\n`);
+    appendTranscript(tf('d.start_fail', { err: e.message }) + '\n');
   }
 }
 
@@ -745,19 +772,19 @@ async function startWhisper() {
       const blob = new Blob(recChunks, { type: 'audio/webm' });
       const buf = new Uint8Array(await blob.arrayBuffer());
       const b64 = bufferToBase64(buf);
-      appendTranscript('[отправляю в OpenAI Whisper…]\n');
+      appendTranscript(t('d.send_oai') + '\n');
       const r = await window.yonie.whisper(b64, 'audio/webm', voiceLangEl.value.split('-')[0]);
       if (r.ok) {
         appendTranscript(r.text + '\n');
         if (r.text) await typeOrCommand(r.text + ' ');
       } else {
-        appendTranscript(`[Whisper ошибка: ${r.reason}]\n`);
+        appendTranscript(tf('d.whisper_err', { reason: r.reason }) + '\n');
       }
     };
     mediaRecorder.start();
     setVoiceUI(true);
   } catch (e) {
-    appendTranscript(`[микрофон недоступен: ${e.message}]\n`);
+    appendTranscript(tf('d.mic_unavailable', { err: e.message }) + '\n');
   }
 }
 
@@ -768,9 +795,9 @@ async function startLocalWhisper() {
   const st = await window.yonie.whisperStatus();
   if (!st.ok) {
     if (!st.cli) {
-      appendTranscript('[Local Whisper: не найден whisper-cli. Установите: brew install whisper-cpp]\n');
+      appendTranscript(t('d.local_no_cli') + '\n');
     } else {
-      appendTranscript(`[Local Whisper: модель не найдена (${st.modelPath}). Запустите: npm run setup]\n`);
+      appendTranscript(tf('d.local_no_model', { path: st.modelPath }) + '\n');
     }
     return;
   }
@@ -839,11 +866,9 @@ async function startLocalWhisper() {
     };
 
     setVoiceUI(true);
-    appendTranscript(continuous
-      ? '[Local Whisper готов. Говорите — буду печатать после каждой паузы.]\n'
-      : '[Local Whisper: запись… нажмите ⏹, чтобы распознать.]\n');
+    appendTranscript((continuous ? t('d.local_ready_cont') : t('d.local_ready_once')) + '\n');
   } catch (e) {
-    appendTranscript(`[микрофон недоступен: ${e.message}]\n`);
+    appendTranscript(tf('d.mic_unavailable', { err: e.message }) + '\n');
     teardownLocalWhisper();
   }
 }
@@ -879,10 +904,10 @@ async function flushUtterance() {
         await typeOrCommand(out + ' ');
       }
     } else if (!r.ok) {
-      appendTranscript(`[Whisper ошибка: ${r.reason}]\n`);
+      appendTranscript(tf('d.whisper_err', { reason: r.reason }) + '\n');
     }
   } catch (e) {
-    appendTranscript(`[ошибка отправки: ${e.message}]\n`);
+    appendTranscript(tf('d.send_err', { err: e.message }) + '\n');
   } finally {
     flushing = false;
   }
@@ -989,10 +1014,10 @@ function setStatus(text, dotClass) {
   }
   // Build mode badge for both compact widget and the floating bar window.
   let modeCls = '', modeText = '';
-  if (userPaused)        { modeCls = 'paused'; modeText = '⏸ ПАУЗА'; }
-  else if (scrollMode)   { modeCls = 'scroll'; modeText = '↕ SCROLL'; }
-  else if (dragActive)   { modeCls = 'drag';   modeText = '🖱 DRAG'; }
-  else if (faceLost)     { modeCls = '';       modeText = '👤❌ нет лица'; }
+  if (userPaused)        { modeCls = 'paused'; modeText = t('d.mode_pause'); }
+  else if (scrollMode)   { modeCls = 'scroll'; modeText = t('d.mode_scroll'); }
+  else if (dragActive)   { modeCls = 'drag';   modeText = t('d.mode_drag'); }
+  else if (faceLost)     { modeCls = '';       modeText = t('d.mode_noface'); }
 
   if (compactMode) {
     compactMode.className = 'compact-badge ' + modeCls;
@@ -1008,7 +1033,7 @@ function enterUseMode(silent) {
   if (compactEl) compactEl.hidden = true; // legacy in-window widget no longer used
   window.yonie.windowSetMode('compact');  // → main process hides mainWindow
   if (!silent) persistSoon();
-  setStatus(controlEnabled ? 'Управление активно' : 'Готово', controlEnabled ? 'ok' : 'warn');
+  setStatus(controlEnabled ? t('d.ctrl_active') : t('d.ready_short'), controlEnabled ? 'ok' : 'warn');
 }
 function exitUseMode() {
   if (compactEl) compactEl.hidden = true;
@@ -1020,7 +1045,7 @@ const exitUseModeBtn = document.getElementById('exitUseMode');
 if (exitUseModeBtn) exitUseModeBtn.addEventListener('click', () => exitUseMode());
 
 // ---- Auto-pause when face is lost ----
-function noteFaceSeen() { lastFaceSeenAt = performance.now(); if (faceLost) { faceLost = false; setStatus('Лицо снова в кадре', 'ok'); } }
+function noteFaceSeen() { lastFaceSeenAt = performance.now(); if (faceLost) { faceLost = false; setStatus(t('d.face_back'), 'ok'); } }
 function checkFaceLoss() {
   if (!autoPauseEl?.checked) { faceLost = false; return; }
   const since = performance.now() - lastFaceSeenAt;
@@ -1030,11 +1055,11 @@ function checkFaceLoss() {
     if (dragActive) { dragActive = false; window.yonie.release('left'); }
     setMode('', '');
     const reason = (video.videoWidth === 0)
-      ? 'нет видео-потока (камера занята другим приложением?)'
+      ? t('d.reason_no_video')
       : (diag.detectErrors > 0 && lastDetectError)
-        ? `ошибка MediaPipe: ${lastDetectError.message}`
-        : 'лицо вне кадра';
-    setStatus('Авто-пауза: ' + reason, 'warn');
+        ? tf('d.reason_mp_err', { msg: lastDetectError.message })
+        : t('d.reason_face_out');
+    setStatus(tf('d.autopause', { reason }), 'warn');
   }
 }
 setInterval(checkFaceLoss, 500);
@@ -1065,7 +1090,7 @@ async function fireCorner(which) {
       if (dragActive) { dragActive = false; await window.yonie.release('left'); }
       scrollMode = false;
       setMode('', '');
-      setStatus('🛑 Аварийная пауза (правый-нижний угол)', 'err');
+      setStatus(t('d.estop'), 'err');
       break;
     case 'BL': /* reserved */ break;
   }
@@ -1076,30 +1101,65 @@ function togglePause() {
     if (dragActive) { dragActive = false; window.yonie.release('left'); }
     scrollMode = false;
     setMode('', '');
-    setStatus('⏸ Пауза', 'warn');
+    setStatus(t('d.paused'), 'warn');
   } else {
-    setStatus('▶ Управление активно', 'ok');
+    setStatus(t('d.resumed'), 'ok');
   }
 }
 
 // ---- Voice commands ----
 const VOICE_COMMANDS = {
-  pause:        [/^\s*пауза\b/i,        /^\s*стоп\b/i,        /^\s*остановись\b/i,  /^\s*pause\b/i,  /^\s*stop\b/i],
-  resume:       [/^\s*продолж/i,        /^\s*продолж/i,        /^\s*старт\b/i,        /^\s*resume\b/i, /^\s*start\b/i],
+  pause:        [/^\s*пауза\b/i,        /^\s*стоп\b/i,        /^\s*остановись\b/i,
+                  /^\s*pause\b/i,        /^\s*stop\b/i,
+                  /^\s*тоқта/i,          /^\s*кідір/i,
+                  /^\s*dur\b/i,          /^\s*duraklat\b/i],
+  resume:       [/^\s*продолж/i,         /^\s*старт\b/i,
+                  /^\s*resume\b/i,       /^\s*start\b/i,
+                  /^\s*жалғастыр/i,      /^\s*бастау\b/i,      /^\s*іске қос/i,
+                  /^\s*devam\b/i,        /^\s*başla\b/i],
   recalibrate:  [/^\s*калибровк/i,       /^\s*откалибруй/i,    /^\s*калибруй/i,
                   /^\s*центр\b/i,         /^\s*центрируй/i,
                   /^\s*recalibrate\b/i,   /^\s*recenter\b/i,    /^\s*calibrate\b/i,
-                  /^\s*center\b/i],
-  click:        [/^\s*клик\s*$/i,       /^\s*нажми\s*$/i,      /^\s*click\s*$/i],
-  rightClick:   [/^\s*правый клик/i,    /^\s*правая кнопка/i,  /^\s*right click/i],
-  doubleClick:  [/^\s*двойной клик/i,   /^\s*двойной\s*$/i,    /^\s*double click/i],
-  scrollUp:     [/^\s*вверх\b/i,        /^\s*scroll up/i],
-  scrollDown:   [/^\s*вниз\b/i,         /^\s*scroll down/i],
-  enter:        [/^\s*ввод\s*$/i,       /^\s*энтер\s*$/i,      /^\s*enter\s*$/i,    /^\s*return\s*$/i],
-  delete:       [/^\s*удали\s*$/i,      /^\s*стереть\s*$/i,    /^\s*бэкспейс\s*$/i, /^\s*backspace\s*$/i, /^\s*delete\s*$/i],
-  space:        [/^\s*пробел\s*$/i,     /^\s*space\s*$/i],
-  showWindow:   [/^\s*покажи окно/i,    /^\s*настройки\b/i,    /^\s*show settings/i],
-  quit:         [/^\s*вы(йти|ход)\b/i,  /^\s*закрой\b/i,       /^\s*quit\b/i,       /^\s*exit\b/i],
+                  /^\s*center\b/i,
+                  /^\s*калибрле/i,        /^\s*ортаға\b/i,
+                  /^\s*kalibre/i,         /^\s*merkez\b/i],
+  click:        [/^\s*клик\s*$/i,        /^\s*нажми\s*$/i,
+                  /^\s*click\s*$/i,
+                  /^\s*бас\s*$/i,         /^\s*басу\s*$/i,      /^\s*шерт\s*$/i,
+                  /^\s*tıkla\s*$/i,       /^\s*tıklat\s*$/i],
+  rightClick:   [/^\s*правый клик/i,     /^\s*правая кнопка/i,
+                  /^\s*right click/i,
+                  /^\s*оң басу/i,         /^\s*оң шерт/i,
+                  /^\s*sağ tıkla/i],
+  doubleClick:  [/^\s*двойной клик/i,    /^\s*двойной\s*$/i,
+                  /^\s*double click/i,
+                  /^\s*екі рет басу/i,    /^\s*қос шерт/i,
+                  /^\s*çift tıkla/i],
+  scrollUp:     [/^\s*вверх\b/i,         /^\s*scroll up/i,
+                  /^\s*жоғары\b/i,
+                  /^\s*yukarı\b/i],
+  scrollDown:   [/^\s*вниз\b/i,          /^\s*scroll down/i,
+                  /^\s*төмен\b/i,
+                  /^\s*aşağı\b/i],
+  enter:        [/^\s*ввод\s*$/i,        /^\s*энтер\s*$/i,
+                  /^\s*enter\s*$/i,       /^\s*return\s*$/i,
+                  /^\s*енгізу\s*$/i,
+                  /^\s*giriş\s*$/i],
+  delete:       [/^\s*удали\s*$/i,       /^\s*стереть\s*$/i,    /^\s*бэкспейс\s*$/i,
+                  /^\s*backspace\s*$/i,   /^\s*delete\s*$/i,
+                  /^\s*жою\s*$/i,         /^\s*өшір\s*$/i,
+                  /^\s*sil\s*$/i,         /^\s*geri sil\s*$/i],
+  space:        [/^\s*пробел\s*$/i,      /^\s*space\s*$/i,
+                  /^\s*бос орын\s*$/i,
+                  /^\s*boşluk\s*$/i],
+  showWindow:   [/^\s*покажи окно/i,     /^\s*настройки\b/i,
+                  /^\s*show settings/i,
+                  /^\s*параметрлер\b/i,   /^\s*терезе\b/i,
+                  /^\s*ayarlar\b/i,       /^\s*pencere\b/i],
+  quit:         [/^\s*вы(йти|ход)\b/i,   /^\s*закрой\b/i,
+                  /^\s*quit\b/i,          /^\s*exit\b/i,
+                  /^\s*шығу\b/i,
+                  /^\s*çık\b/i,           /^\s*kapat\b/i],
 };
 
 // Returns the command name if matched, else null.
@@ -1113,10 +1173,10 @@ function parseVoiceCommand(text) {
 }
 
 async function executeVoiceCommand(cmd) {
-  appendTranscript(`[команда: ${cmd}]\n`);
+  appendTranscript(tf('d.cmd_log', { cmd }) + '\n');
   switch (cmd) {
-    case 'pause':       userPaused = true;  setStatus('⏸ Пауза (голос)', 'warn'); break;
-    case 'resume':      userPaused = false; setStatus('▶ Продолжаю', 'ok'); break;
+    case 'pause':       userPaused = true;  setStatus(t('d.paused') + ' (voice)', 'warn'); break;
+    case 'resume':      userPaused = false; setStatus(t('d.resumed'), 'ok'); break;
     case 'recalibrate': voiceCalibrate(); break;
     case 'click':       window.yonie.click('left'); break;
     case 'rightClick':  window.yonie.click('right'); break;
@@ -1156,7 +1216,7 @@ async function typeOrCommand(text) {
     // Then try app/URL launchers (открой ютуб, найди коты, открой telegram…)
     const launch = parseLaunchCommand(text);
     if (launch) {
-      appendTranscript(`[запуск: ${launch.label}]\n`);
+      appendTranscript(tf('d.launch_log', { label: launch.label }) + '\n');
       await window.yonie.launch(launch.spec);
       return { ok: true, launched: launch.label };
     }
@@ -1172,71 +1232,80 @@ async function typeOrCommand(text) {
 
 const EDITOR_COMMANDS = [
   // ---- Files / project ----
-  { match: [/^сохрани(ть)?\b/i, /^сейв\b/i, /^save\b/i],
+  { match: [/^сохрани(ть)?\b/i, /^сейв\b/i, /^save\b/i, /^сақта/i, /^kaydet/i],
     key: 'S', mods: ['cmd'], label: '💾 Save (⌘S)' },
-  { match: [/^сохрани всё/i, /^save all/i],
+  { match: [/^сохрани всё/i, /^save all/i, /^барлығын сақта/i, /^tümünü kaydet/i],
     key: 'S', mods: ['cmd', 'alt'], label: '💾 Save All (⌥⌘S)' },
-  { match: [/^открой файл/i, /^файл\b/i, /^open file/i, /^quick open/i],
+  { match: [/^открой файл/i, /^файл\b/i, /^open file/i, /^quick open/i,
+            /^файл аш/i, /^файлды аш/i, /^dosya aç/i, /^dosyayı aç/i],
     key: 'P', mods: ['cmd'], label: '📂 Quick Open (⌘P)' },
-  { match: [/^команд[ау]\b/i, /^палитр[ау]/i, /^command palette/i, /^команда\s*$/i],
+  { match: [/^команд[ау]\b/i, /^палитр[ау]/i, /^command palette/i, /^команда\s*$/i,
+            /^komut/i, /^komut paleti/i, /^әмір\b/i],
     key: 'P', mods: ['cmd', 'shift'], label: '⌘ Command Palette (⇧⌘P)' },
 
   // ---- Edit ----
-  { match: [/^отмен[аи]?\b/i, /^undo\b/i],
+  { match: [/^отмен[аи]?\b/i, /^undo\b/i, /^болдырмау/i, /^қайтар/i, /^geri al/i],
     key: 'Z', mods: ['cmd'], label: '↶ Undo (⌘Z)' },
-  { match: [/^верни?\b/i, /^повтори\b/i, /^redo\b/i],
+  { match: [/^верни?\b/i, /^повтори\b/i, /^redo\b/i, /^қайтадан/i, /^yinele/i, /^tekrar yap/i],
     key: 'Z', mods: ['cmd', 'shift'], label: '↷ Redo (⇧⌘Z)' },
-  { match: [/^вырежи\b/i, /^cut\b/i],
+  { match: [/^вырежи\b/i, /^cut\b/i, /^қию\b/i, /^kes\b/i],
     key: 'X', mods: ['cmd'], label: '✂ Cut (⌘X)' },
-  { match: [/^скопируй\b/i, /^копир(уй|овать)\b/i, /^copy\b/i],
+  { match: [/^скопируй\b/i, /^копир(уй|овать)\b/i, /^copy\b/i, /^көшір/i, /^kopyala/i],
     key: 'C', mods: ['cmd'], label: '⎘ Copy (⌘C)' },
-  { match: [/^вставь\b/i, /^paste\b/i],
+  { match: [/^вставь\b/i, /^paste\b/i, /^қой\s*$/i, /^yapıştır/i],
     key: 'V', mods: ['cmd'], label: '⎗ Paste (⌘V)' },
-  { match: [/^выдели всё/i, /^select all/i],
+  { match: [/^выдели всё/i, /^select all/i, /^барлығын таңда/i, /^tümünü seç/i],
     key: 'A', mods: ['cmd'], label: '⌷ Select All (⌘A)' },
-  { match: [/^дублируй (строку|линию)/i, /^duplicate line/i],
+  { match: [/^дублируй (строку|линию)/i, /^duplicate line/i, /^жолды қайтала/i, /^satırı çoğalt/i],
     key: 'Down', mods: ['shift', 'alt'], label: '↧ Duplicate line (⇧⌥↓)' },
-  { match: [/^удали строку/i, /^delete line/i],
+  { match: [/^удали строку/i, /^delete line/i, /^жолды жой/i, /^satırı sil/i],
     key: 'K', mods: ['cmd', 'shift'], label: '✗ Delete line (⇧⌘K)' },
-  { match: [/^комментарий\b/i, /^закомментируй\b/i, /^comment\b/i, /^toggle comment/i],
+  { match: [/^комментарий\b/i, /^закомментируй\b/i, /^comment\b/i, /^toggle comment/i,
+            /^түсініктеме/i, /^yorum/i],
     key: 'Slash', mods: ['cmd'], label: '// Toggle comment (⌘/)' },
-  { match: [/^отступ\b/i, /^indent\b/i],
+  { match: [/^отступ\b/i, /^indent\b/i, /^шегініс\b/i, /^girinti/i],
     key: 'Tab', label: '→ Indent (Tab)' },
-  { match: [/^разотступ\b/i, /^outdent\b/i, /^убери отступ/i],
+  { match: [/^разотступ\b/i, /^outdent\b/i, /^убери отступ/i, /^geri girinti/i],
     key: 'Tab', mods: ['shift'], label: '← Outdent (⇧Tab)' },
 
   // ---- Find / replace ----
-  { match: [/^найди\b/i, /^поиск\b/i, /^find\b/i],
+  { match: [/^найди\b/i, /^поиск\b/i, /^find\b/i, /^тап\s*$/i, /^іздеу\b/i, /^bul\b/i, /^ara\b/i],
     key: 'F', mods: ['cmd'], label: '🔍 Find (⌘F)' },
-  { match: [/^замени\b/i, /^замена\b/i, /^replace\b/i],
+  { match: [/^замени\b/i, /^замена\b/i, /^replace\b/i, /^алмастыр/i, /^değiştir/i],
     key: 'F', mods: ['cmd', 'alt'], label: '⇄ Replace (⌥⌘F)' },
-  { match: [/^найди в файлах/i, /^find in files/i, /^global find/i],
+  { match: [/^найди в файлах/i, /^find in files/i, /^global find/i,
+            /^файлдардан тап/i, /^dosyalarda ara/i],
     key: 'F', mods: ['cmd', 'shift'], label: '🔍 Find in files (⇧⌘F)' },
-  { match: [/^следующее( совпадение)?$/i, /^find next/i],
+  { match: [/^следующее( совпадение)?$/i, /^find next/i, /^келесі\s*$/i, /^sonraki\s*$/i],
     key: 'G', mods: ['cmd'], label: '↓ Next match (⌘G)' },
-  { match: [/^предыдущее( совпадение)?$/i, /^find previous/i],
+  { match: [/^предыдущее( совпадение)?$/i, /^find previous/i,
+            /^алдыңғы\s*$/i, /^önceki\s*$/i],
     key: 'G', mods: ['cmd', 'shift'], label: '↑ Prev match (⇧⌘G)' },
 
   // ---- Tabs / windows ----
-  { match: [/^новая вкладка/i, /^new tab/i],
+  { match: [/^новая вкладка/i, /^new tab/i, /^жаңа қойынды/i, /^yeni sekme/i],
     key: 'T', mods: ['cmd'], label: '➕ New tab (⌘T)' },
-  { match: [/^закрой вкладку/i, /^закрой окно/i, /^close tab/i, /^close window/i],
+  { match: [/^закрой вкладку/i, /^закрой окно/i, /^close tab/i, /^close window/i,
+            /^қойынды жабу/i, /^sekmeyi kapat/i, /^pencereyi kapat/i],
     key: 'W', mods: ['cmd'], label: '✕ Close tab (⌘W)' },
-  { match: [/^верни вкладку/i, /^reopen tab/i],
+  { match: [/^верни вкладку/i, /^reopen tab/i, /^қойындыны қайтар/i, /^sekmeyi geri aç/i],
     key: 'T', mods: ['cmd', 'shift'], label: '↩ Reopen tab (⇧⌘T)' },
-  { match: [/^следующая вкладка/i, /^next tab/i],
+  { match: [/^следующая вкладка/i, /^next tab/i, /^келесі қойынды/i, /^sonraki sekme/i],
     key: 'Right', mods: ['cmd', 'alt'], label: '→ Next tab (⌥⌘→)' },
-  { match: [/^предыдущая вкладка/i, /^prev(ious)? tab/i],
+  { match: [/^предыдущая вкладка/i, /^prev(ious)? tab/i,
+            /^алдыңғы қойынды/i, /^önceki sekme/i],
     key: 'Left', mods: ['cmd', 'alt'], label: '← Prev tab (⌥⌘←)' },
-  { match: [/^следующее окно/i, /^next window/i, /^cmd tab/i],
+  { match: [/^следующее окно/i, /^next window/i, /^cmd tab/i,
+            /^келесі терезе/i, /^sonraki pencere/i],
     key: 'Tab', mods: ['cmd'], label: '⇄ Next window (⌘Tab)' },
 
-  // ---- Navigation (browser/editor) ----
-  { match: [/^назад\b/i, /^back\b/i],
+  // ---- Navigation ----
+  { match: [/^назад\b/i, /^back\b/i, /^артқа\b/i, /^geri\b/i],
     key: 'LeftBracket', mods: ['cmd'], label: '← Back (⌘[)' },
-  { match: [/^вперёд\b/i, /^вперед\b/i, /^forward\b/i],
+  { match: [/^вперёд\b/i, /^вперед\b/i, /^forward\b/i, /^алға\b/i, /^ileri\b/i],
     key: 'RightBracket', mods: ['cmd'], label: '→ Forward (⌘])' },
-  { match: [/^обнови\b/i, /^перезагрузи\b/i, /^reload\b/i, /^refresh\b/i],
+  { match: [/^обнови\b/i, /^перезагрузи\b/i, /^reload\b/i, /^refresh\b/i,
+            /^жаңарт/i, /^yenile/i],
     key: 'R', mods: ['cmd'], label: '↻ Reload (⌘R)' },
 
   // ---- Terminal / system ----
@@ -1244,15 +1313,18 @@ const EDITOR_COMMANDS = [
     key: 'Grave', mods: ['ctrl'], label: '▷_ Toggle terminal (⌃`)' },
   { match: [/^spotlight\b/i, /^споt?лайт\b/i, /^прожектор\b/i],
     key: 'Space', mods: ['cmd'], label: '🔎 Spotlight (⌘Space)' },
-  { match: [/^скриншот\b/i, /^screenshot\b/i],
+  { match: [/^скриншот\b/i, /^screenshot\b/i, /^экран суреті/i, /^ekran görüntüsü/i],
     key: '4', mods: ['cmd', 'shift'], label: '📸 Screenshot (⇧⌘4)' },
-  { match: [/^mission control/i, /^экспозе\b/i],
+  { match: [/^mission control/i, /^экспозе\b/i, /^экспоза\b/i],
     key: 'Up', mods: ['ctrl'], label: '🗂 Mission Control (⌃↑)' },
-  { match: [/^спрячь окно/i, /^hide window/i, /^скрой окно/i],
+  { match: [/^спрячь окно/i, /^hide window/i, /^скрой окно/i,
+            /^терезені жасыр/i, /^pencereyi gizle/i],
     key: 'H', mods: ['cmd'], label: '↧ Hide app (⌘H)' },
 
-  // ---- Special: precision mode (handled in typeOrCommand) ----
-  { match: [/^точно\b/i, /^точность\b/i, /^прицел\b/i, /^precision\b/i],
+  // ---- Special: precision mode ----
+  { match: [/^точно\b/i, /^точность\b/i, /^прицел\b/i, /^precision\b/i,
+            /^дәл\b/i, /^нысан\b/i,
+            /^hassas\b/i, /^nişan\b/i],
     action: 'precision', label: '🎯 Precision mode' },
 ];
 
@@ -1336,25 +1408,25 @@ function parseLaunchCommand(rawText) {
   const text = normalizePhrase(rawText);
   if (!text) return null;
 
-  // 1) «найди / поиск / search / google ...» → google search
-  const searchM = text.match(/^(найди|найти|поищи|поиск|загугли|search|google)\s+(.{2,})$/i);
+  // 1) «найди / поиск / search / google ...» / «тап / іздеу» / «ara / bul» → google search
+  const searchM = text.match(/^(найди|найти|поищи|поиск|загугли|search|google|тап|іздеу|ara|bul)\s+(.{2,})$/i);
   if (searchM) {
     const q = searchM[2].trim();
     return {
-      label: `поиск «${q}»`,
+      label: tf('d.search_label', { q }),
       spec: { url: 'https://www.google.com/search?q=' + encodeURIComponent(q) },
     };
   }
 
-  // 2) «открой / запусти / open / launch / start <X>»
-  const openM = text.match(/^(открой|открыть|запусти|запуск|включи|open|launch|start|run)\s+(.{2,})$/i);
+  // 2) «открой / запусти / open / launch / start / аш / aç <X>»
+  const openM = text.match(/^(открой|открыть|запусти|запуск|включи|open|launch|start|run|аш|ашу|іске қос|aç|başlat|çalıştır)\s+(.{2,})$/i);
   if (!openM) return null;
 
   let target = openM[2].trim();
-  // Drop leading articles/words: "the", "сайт", "приложение", "app", "приложуху"
-  target = target.replace(/^(the|сайт|приложение|приложуху|app|application|программу|программа)\s+/i, '').trim();
+  // Drop common prefix words that aren't part of the app name.
+  target = target.replace(/^(the|сайт|приложение|приложуху|app|application|программу|программа|сайтын|қолданба|uygulama|site|sitesi)\s+/i, '').trim();
 
-  // 2a) Direct URL? "открой example.com / https://..."
+  // 2a) Direct URL?
   if (/^(https?:\/\/|www\.|[a-z0-9-]+\.[a-z]{2,})/i.test(target)) {
     const url = /^https?:\/\//i.test(target) ? target : 'https://' + target.replace(/^www\./, '');
     return { label: url, spec: { url } };
@@ -1366,7 +1438,6 @@ function parseLaunchCommand(rawText) {
   }
 
   // 2c) Fallback — assume macOS application name as spoken.
-  // Capitalize first letter to improve `open -a` matching.
   const macApp = target.charAt(0).toUpperCase() + target.slice(1);
   return { label: macApp, spec: { macApp } };
 }
@@ -1374,16 +1445,21 @@ function parseLaunchCommand(rawText) {
 // ---- Auto-start (hands-free boot) ----
 async function autoStartAll() {
   if (!controlEnabled) {
-    // Re-use the same path as clicking the toggle button.
     toggleBtn.click();
   }
   // Auto-start voice in continuous local-whisper mode if available.
   if (!voiceActive && bootstrap.hasLocalWhisper) {
     voiceEngineEl.value = 'local';
     if (continuousVoiceEl) continuousVoiceEl.checked = true;
+    // Sync recognition language with the UI language if user hasn't picked one.
+    if (window.i18n) {
+      const map = { ru: 'ru-RU', en: 'en-US', kk: 'kk-KZ', tr: 'tr-TR' };
+      const want = map[window.i18n.getLang()];
+      if (want) voiceLangEl.value = want;
+    }
     voiceBtn.click();
   }
-  setStatus('▶ Автозапуск: всё активно', 'ok');
+  setStatus(t('d.autostart_all'), 'ok');
 }
 
 // ---- Wire face-detection + hot-corner check into the existing tick loop ----
@@ -1408,20 +1484,16 @@ handleFace = function (result, now) {
       const info = diagnose();
       console.log('[yonie] diagnose:', info);
       if (diag.frames === 0) {
-        statusEl.textContent =
-          `❌ Камера не отдаёт кадры (videoWidth=${info.videoW}, readyState=${info.ready}). ` +
-          `Открыта ли камера в другом приложении? Проверь System Settings → Camera.`;
+        statusEl.textContent = tf('d.diag_no_frames', { w: info.videoW, r: info.ready });
       } else if (diag.faceFrames === 0) {
-        statusEl.textContent =
-          `⚠ Кадры идут (${diag.frames}/5с), но лицо не найдено. ` +
-          `Освещение/позиция перед камерой? detectErrors=${diag.detectErrors}` +
-          (lastDetectError ? ` (${lastDetectError.message})` : '');
+        const tail = lastDetectError ? ` (${lastDetectError.message})` : '';
+        statusEl.textContent = tf('d.diag_no_face', { n: diag.frames, e: diag.detectErrors, tail });
       } else {
-        statusEl.textContent = `✓ Работает: ${diag.faceFrames}/${diag.frames} кадров с лицом за 5с (${mpDelegate}).`;
+        statusEl.textContent = tf('d.diag_ok', { f: diag.faceFrames, n: diag.frames, d: mpDelegate });
       }
     }, 5000);
   } catch (e) {
-    statusEl.textContent = 'Ошибка инициализации: ' + e.message;
+    statusEl.textContent = tf('d.init_err', { msg: e.message });
     console.error(e);
   }
 })();
@@ -1463,18 +1535,18 @@ setInterval(() => {
   if (cd) cd.textContent = `${mpDelegate || '—'}`;
   if (cf) cf.textContent = video.videoWidth
     ? `${video.videoWidth}×${video.videoHeight} · ${fps}fps`
-    : 'нет потока';
-  if (cF) cF.textContent = faceFps > 0 ? `лицо ${faceFps}/с` : 'нет лица';
+    : t('d.chip_no_stream');
+  if (cF) cF.textContent = faceFps > 0 ? tf('d.chip_face', { n: faceFps }) : t('d.chip_no_face');
 
   // Overview stat tiles
   const ssState = document.getElementById('stat-state');
   const ssFps   = document.getElementById('stat-fps');
   const ssModel = document.getElementById('stat-model');
   if (ssState) {
-    let s = 'Готов';
-    if (userPaused)             s = 'Пауза';
-    else if (faceLost)          s = 'Нет лица';
-    else if (controlEnabled)    s = 'Активно';
+    let s = t('d.s_ready');
+    if (userPaused)             s = t('d.s_paused');
+    else if (faceLost)          s = t('d.s_noface');
+    else if (controlEnabled)    s = t('d.s_active');
     ssState.textContent = s;
   }
   if (ssFps) ssFps.textContent = video.videoWidth ? `${faceFps}/${fps}` : '—';
