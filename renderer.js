@@ -91,10 +91,26 @@ window.yonie.onBootstrap((b) => {
   }
   // Restore saved configuration (helper set this up earlier).
   applyConfig(b.config || {});
-  // Auto-start cursor + voice as soon as we have a saved calibration.
-  // (After the first setup, every subsequent launch is fully hands-free.)
-  if (b.config && b.config.calibCenter) {
-    setTimeout(autoStartAll, 1500); // give camera + model a moment
+
+  // Auto-start cursor + voice ONLY when the user opted in via the checkbox.
+  // Read straight from the DOM (applyConfig set it) so we always reflect the
+  // current persisted state — even if b.config and the checkbox got out of sync.
+  const wantAutoStart = Boolean(autoStartEl?.checked || (b.config && b.config.autoStart));
+  console.log('[yonie] bootstrap →', {
+    autoStart: wantAutoStart,
+    hasCalib: Boolean(b.config && b.config.calibCenter),
+    hasLocalWhisper: b.hasLocalWhisper,
+  });
+
+  if (wantAutoStart) {
+    setTimeout(() => {
+      autoStartAll();
+      // If we didn't have calibration, nudge the user — voice may still be working.
+      if (!calibCenter && statusEl) {
+        statusEl.textContent =
+          'Автозапуск активен. Для курсора нажмите 🎯 «Калибровать» в нейтральной позе.';
+      }
+    }, 1500);
   }
 });
 
@@ -148,6 +164,26 @@ function persistSoon() {
 for (const id of PERSISTED_CONTROLS) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', persistSoon);
+}
+
+// Hands-free toggles persist *immediately* (no 300ms debounce) so closing the
+// window right after toggling autoStart still saves the new value.
+function persistNow() {
+  clearTimeout(saveTimer);
+  const cfg = { ...savedConfig };
+  for (const id of PERSISTED_CONTROLS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    cfg[id] = el.type === 'checkbox' ? el.checked : el.value;
+  }
+  if (calibCenter) cfg.calibCenter = calibCenter;
+  cfg.runMode = false;
+  savedConfig = cfg;
+  window.yonie.configSet(cfg);
+}
+for (const id of ['autoStart', 'autoPause', 'hotCorners', 'voiceCommands']) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', persistNow);
 }
 
 // -------------------- MediaPipe init --------------------
@@ -1052,8 +1088,121 @@ async function typeOrCommand(text) {
       await executeVoiceCommand(cmd);
       return { ok: true, command: cmd };
     }
+    // Then try app/URL launchers (открой ютуб, найди коты, открой telegram…)
+    const launch = parseLaunchCommand(text);
+    if (launch) {
+      appendTranscript(`[запуск: ${launch.label}]\n`);
+      await window.yonie.launch(launch.spec);
+      return { ok: true, launched: launch.label };
+    }
   }
   return window.yonie.typeText(text);
+}
+
+// ---- Launch (open URL / app) commands --------------------------------------------
+//
+// Распознаём фразы вида:
+//   «открой ютуб» / «open youtube»     → https://youtube.com
+//   «найди коты в шапках» / «search …» → https://google.com/search?q=…
+//   «открой телеграм»                  → tg://
+//   «открой <macOS app name>»          → open -a <App>
+//
+// Источники: единый словарь LAUNCH_TARGETS (можно расширять).
+
+// Site / protocol shortcuts: ключ — нормализованная фраза без «открой/open»,
+// значение — что отправлять в shell.openExternal.
+const LAUNCH_TARGETS = [
+  // browser / search
+  { match: /^(браузер|сафари|safari|browser)$/i,        spec: { macApp: 'Safari' },                label: 'Safari' },
+  { match: /^(хром|chrome)$/i,                          spec: { macApp: 'Google Chrome' },         label: 'Chrome' },
+  { match: /^(firefox|фай[ае]рфокс|фф)$/i,              spec: { macApp: 'Firefox' },               label: 'Firefox' },
+  { match: /^(arc|арк)$/i,                              spec: { macApp: 'Arc' },                   label: 'Arc' },
+  { match: /^(гугл|google)$/i,                          spec: { url: 'https://google.com' },       label: 'Google' },
+  { match: /^(ютуб|youtube|ютьюб)$/i,                   spec: { url: 'https://youtube.com' },      label: 'YouTube' },
+  { match: /^(почт[ау]|mail|почта)$/i,                  spec: { macApp: 'Mail' },                  label: 'Mail' },
+  { match: /^(gmail|джи?мейл)$/i,                       spec: { url: 'https://mail.google.com' },  label: 'Gmail' },
+  { match: /^(карт[ыа]|maps|карты)$/i,                  spec: { url: 'https://maps.google.com' },  label: 'Google Maps' },
+  { match: /^(переводчик|translator|translate)$/i,      spec: { url: 'https://translate.google.com' }, label: 'Translator' },
+  { match: /^(github|гит\s?хаб|гитхаб)$/i,              spec: { url: 'https://github.com' },       label: 'GitHub' },
+  { match: /^(twitter|x|твиттер|икс)$/i,                spec: { url: 'https://x.com' },            label: 'X / Twitter' },
+  { match: /^(reddit|реддит)$/i,                        spec: { url: 'https://reddit.com' },       label: 'Reddit' },
+  { match: /^(википедия|wiki(pedia)?)$/i,               spec: { url: 'https://wikipedia.org' },    label: 'Wikipedia' },
+  { match: /^(stack ?overflow|стак\s?оверфло)$/i,       spec: { url: 'https://stackoverflow.com' }, label: 'StackOverflow' },
+  { match: /^(chat ?gpt|чат ?гпт|gpt)$/i,               spec: { url: 'https://chat.openai.com' },  label: 'ChatGPT' },
+  { match: /^(claude|клод)$/i,                          spec: { url: 'https://claude.ai' },        label: 'Claude' },
+
+  // chat / messengers
+  { match: /^(telegram|телеграм(м)?|тг)$/i,             spec: { macApp: 'Telegram' },              label: 'Telegram' },
+  { match: /^(whatsapp|вотс?ап|ватсап)$/i,              spec: { macApp: 'WhatsApp' },              label: 'WhatsApp' },
+  { match: /^(discord|дискорд)$/i,                      spec: { macApp: 'Discord' },               label: 'Discord' },
+  { match: /^(slack|слак)$/i,                           spec: { macApp: 'Slack' },                 label: 'Slack' },
+  { match: /^(zoom|зум)$/i,                             spec: { macApp: 'zoom.us' },               label: 'Zoom' },
+
+  // media
+  { match: /^(spotify|спотифай)$/i,                     spec: { macApp: 'Spotify' },               label: 'Spotify' },
+  { match: /^(музыка|music|apple music|эпл\s?мьюзик)$/i, spec: { macApp: 'Music' },                label: 'Music' },
+  { match: /^(netflix|нетфликс)$/i,                     spec: { url: 'https://netflix.com' },      label: 'Netflix' },
+
+  // dev / system
+  { match: /^(терминал|terminal)$/i,                    spec: { macApp: 'Terminal' },              label: 'Terminal' },
+  { match: /^(iterm|айтерм)$/i,                         spec: { macApp: 'iTerm' },                 label: 'iTerm' },
+  { match: /^(vs ?code|вс ?код|вэс ?код|студия|visual studio code)$/i,
+                                                        spec: { macApp: 'Visual Studio Code' },    label: 'VS Code' },
+  { match: /^(xcode|икскод)$/i,                         spec: { macApp: 'Xcode' },                 label: 'Xcode' },
+  { match: /^(finder|файнд?ер|проводник)$/i,            spec: { macApp: 'Finder' },                label: 'Finder' },
+  { match: /^(notes|заметки)$/i,                        spec: { macApp: 'Notes' },                 label: 'Notes' },
+  { match: /^(reminders|напоминания)$/i,                spec: { macApp: 'Reminders' },             label: 'Reminders' },
+  { match: /^(calendar|календарь)$/i,                   spec: { macApp: 'Calendar' },              label: 'Calendar' },
+  { match: /^(calculator|калькулятор)$/i,               spec: { macApp: 'Calculator' },            label: 'Calculator' },
+  { match: /^(system ?settings|настройки маc?ос)$/i,    spec: { macApp: 'System Settings' },       label: 'System Settings' },
+];
+
+// Strip trailing punctuation, leading/trailing spaces, common filler endings.
+function normalizePhrase(s) {
+  return String(s || '')
+    .replace(/[«»"'`.,!?…]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function parseLaunchCommand(rawText) {
+  const text = normalizePhrase(rawText);
+  if (!text) return null;
+
+  // 1) «найди / поиск / search / google ...» → google search
+  const searchM = text.match(/^(найди|найти|поищи|поиск|загугли|search|google)\s+(.{2,})$/i);
+  if (searchM) {
+    const q = searchM[2].trim();
+    return {
+      label: `поиск «${q}»`,
+      spec: { url: 'https://www.google.com/search?q=' + encodeURIComponent(q) },
+    };
+  }
+
+  // 2) «открой / запусти / open / launch / start <X>»
+  const openM = text.match(/^(открой|открыть|запусти|запуск|включи|open|launch|start|run)\s+(.{2,})$/i);
+  if (!openM) return null;
+
+  let target = openM[2].trim();
+  // Drop leading articles/words: "the", "сайт", "приложение", "app", "приложуху"
+  target = target.replace(/^(the|сайт|приложение|приложуху|app|application|программу|программа)\s+/i, '').trim();
+
+  // 2a) Direct URL? "открой example.com / https://..."
+  if (/^(https?:\/\/|www\.|[a-z0-9-]+\.[a-z]{2,})/i.test(target)) {
+    const url = /^https?:\/\//i.test(target) ? target : 'https://' + target.replace(/^www\./, '');
+    return { label: url, spec: { url } };
+  }
+
+  // 2b) Known shortcut from LAUNCH_TARGETS
+  for (const t of LAUNCH_TARGETS) {
+    if (t.match.test(target)) return { label: t.label, spec: t.spec };
+  }
+
+  // 2c) Fallback — assume macOS application name as spoken.
+  // Capitalize first letter to improve `open -a` matching.
+  const macApp = target.charAt(0).toUpperCase() + target.slice(1);
+  return { label: macApp, spec: { macApp } };
 }
 
 // ---- Auto-start (hands-free boot) ----

@@ -426,3 +426,34 @@ ipcMain.handle('app:open-system-settings', async (_e, pane) => {
 
 ipcMain.handle('app:dialog', async (_e, opts) => dialog.showMessageBox(mainWindow, opts));
 
+// --- Launch URLs / macOS apps via voice commands ----------------------------------
+
+ipcMain.handle('app:launch', async (_e, spec = {}) => {
+  try {
+    // 1) URL → open in default browser (works for https, mailto, tg://, spotify://, etc.)
+    if (spec.url) {
+      await shell.openExternal(spec.url);
+      return { ok: true, kind: 'url' };
+    }
+    // 2) macOS application by name → `open -a "AppName"`
+    if (spec.macApp) {
+      if (process.platform !== 'darwin') {
+        return { ok: false, reason: 'macApp only supported on darwin' };
+      }
+      const child = spawn('open', ['-a', spec.macApp], { detached: true, stdio: 'ignore' });
+      child.on('error', () => {});
+      child.unref();
+      return { ok: true, kind: 'app' };
+    }
+    // 3) Generic shell.openPath fallback for files/folders.
+    if (spec.path) {
+      const err = await shell.openPath(spec.path);
+      if (err) return { ok: false, reason: err };
+      return { ok: true, kind: 'path' };
+    }
+    return { ok: false, reason: 'no-target' };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+});
+

@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('yonie', {
   windowShow: () => ipcRenderer.invoke('window:show'),
   windowSetMode: (mode) => ipcRenderer.invoke('window:setMode', mode),
   barStatus: (status) => ipcRenderer.invoke('bar:status', status),
+  launch: (spec) => ipcRenderer.invoke('app:launch', spec),
   quit: () => ipcRenderer.invoke('app:quit'),
 });
 
