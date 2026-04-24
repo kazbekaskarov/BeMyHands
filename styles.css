@@ -246,6 +246,7 @@ a { color: var(--c-accent-2); text-decoration: none; }
 .mode-badge.scroll { background: var(--c-warn); color: #000; }
 .mode-badge.drag   { background: var(--c-err);  color: #fff; }
 .mode-badge.paused { background: var(--c-fg-4); color: #fff; }
+.mode-badge.precision { background: var(--c-accent); color: #fff; box-shadow: 0 0 0 3px rgba(99,102,241,.25); }
 
 /* ============================================================
    Cards

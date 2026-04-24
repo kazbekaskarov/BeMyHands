@@ -77,6 +77,23 @@ let lastScrollAt = 0;
 // Diagnostics: track frame throughput so we can tell whether camera/MP/face is the problem.
 const diag = { frames: 0, faceFrames: 0, detectErrors: 0, startedAt: 0 };
 
+// Precision mode: voice "точно" → 3 sec at ×0.25 sensitivity + on-screen crosshair.
+let precisionUntil = 0;
+let precisionTimer = null;
+function activatePrecision(durationMs = 3000) {
+  precisionUntil = performance.now() + durationMs;
+  setMode('🎯 PRECISION', 'precision');
+  try { window.yonie.crosshair.show(); } catch {}
+  clearTimeout(precisionTimer);
+  precisionTimer = setTimeout(() => {
+    if (performance.now() >= precisionUntil) {
+      try { window.yonie.crosshair.hide(); } catch {}
+      // Don't clobber drag/scroll badges if those are now active.
+      if (!dragActive && !scrollMode && !userPaused) setMode('', '');
+    }
+  }, durationMs + 60);
+}
+
 window.yonie.onBootstrap((b) => {
   bootstrap = b;
   if (!b.hasOpenAIKey) {
@@ -359,8 +376,11 @@ function handleFace(result, now) {
   // Sensitivity & mirroring (camera is mirrored visually; invert x so head-right → cursor-right).
   const sensX = parseFloat(sensXEl.value);
   const sensY = parseFloat(sensYEl.value);
-  let dx = -(pt.x - calibCenter.x) * sensX; // invert
-  let dy = (pt.y - calibCenter.y) * sensY;
+  // Precision mode → quarter sensitivity for ~3 sec for pixel-perfect aiming.
+  const precisionActive = now < precisionUntil;
+  const sensMul = precisionActive ? 0.25 : 1;
+  let dx = -(pt.x - calibCenter.x) * sensX * sensMul; // invert
+  let dy = (pt.y - calibCenter.y) * sensY * sensMul;
 
   // Map deltas to absolute screen coordinates around screen center.
   const sw = bootstrap.screen.width;
@@ -409,6 +429,9 @@ function handleFace(result, now) {
       }
     } else if (now >= freezeUntil) {
       window.yonie.moveCursor(smoothed.x, smoothed.y);
+      if (precisionActive) {
+        try { window.yonie.crosshair.move(smoothed.x, smoothed.y); } catch {}
+      }
     }
 
     // Dwell click (only when not in special modes).
@@ -617,6 +640,33 @@ calibrateBtn.addEventListener('click', () => {
   statusEl.textContent = 'Откалибровано. Двигайте головой — курсор будет следовать.';
   persistSoon(); // save calibCenter so next launch auto-starts hands-free.
 });
+
+// Voice-triggered calibration with a 3-2-1 countdown so the user has time to
+// sit upright and look straight ahead before the snapshot is taken.
+let calibrationCountdown = null;
+function voiceCalibrate() {
+  if (calibrationCountdown) return; // already counting down
+  setMode('🎯 КАЛИБРОВКА', 'precision');
+  let n = 3;
+  setStatus(`Калибровка через ${n}… смотрите прямо в камеру`, 'warn');
+  calibrationCountdown = setInterval(() => {
+    n -= 1;
+    if (n > 0) {
+      setStatus(`Калибровка через ${n}…`, 'warn');
+    } else {
+      clearInterval(calibrationCountdown);
+      calibrationCountdown = null;
+      // Trigger the same code path as clicking the button.
+      calibrateBtn.click();
+      // Restore mode badge after the brief calibration flash.
+      setTimeout(() => {
+        if (!dragActive && !scrollMode && !userPaused && performance.now() >= precisionUntil) {
+          setMode('', '');
+        }
+      }, 400);
+    }
+  }, 1000);
+}
 
 document.querySelectorAll('.help button[data-pane]').forEach((b) => {
   b.addEventListener('click', () => window.yonie.openSystemSettings(b.dataset.pane));
@@ -1036,7 +1086,10 @@ function togglePause() {
 const VOICE_COMMANDS = {
   pause:        [/^\s*пауза\b/i,        /^\s*стоп\b/i,        /^\s*остановись\b/i,  /^\s*pause\b/i,  /^\s*stop\b/i],
   resume:       [/^\s*продолж/i,        /^\s*продолж/i,        /^\s*старт\b/i,        /^\s*resume\b/i, /^\s*start\b/i],
-  recalibrate:  [/^\s*калибровк/i,      /^\s*центр\b/i,        /^\s*recalibrate\b/i, /^\s*center\b/i],
+  recalibrate:  [/^\s*калибровк/i,       /^\s*откалибруй/i,    /^\s*калибруй/i,
+                  /^\s*центр\b/i,         /^\s*центрируй/i,
+                  /^\s*recalibrate\b/i,   /^\s*recenter\b/i,    /^\s*calibrate\b/i,
+                  /^\s*center\b/i],
   click:        [/^\s*клик\s*$/i,       /^\s*нажми\s*$/i,      /^\s*click\s*$/i],
   rightClick:   [/^\s*правый клик/i,    /^\s*правая кнопка/i,  /^\s*right click/i],
   doubleClick:  [/^\s*двойной клик/i,   /^\s*двойной\s*$/i,    /^\s*double click/i],
@@ -1064,7 +1117,7 @@ async function executeVoiceCommand(cmd) {
   switch (cmd) {
     case 'pause':       userPaused = true;  setStatus('⏸ Пауза (голос)', 'warn'); break;
     case 'resume':      userPaused = false; setStatus('▶ Продолжаю', 'ok'); break;
-    case 'recalibrate': calibrateBtn.click(); break;
+    case 'recalibrate': voiceCalibrate(); break;
     case 'click':       window.yonie.click('left'); break;
     case 'rightClick':  window.yonie.click('right'); break;
     case 'doubleClick': window.yonie.doubleClick('left'); break;
@@ -1088,6 +1141,18 @@ async function typeOrCommand(text) {
       await executeVoiceCommand(cmd);
       return { ok: true, command: cmd };
     }
+    // Editor / system shortcuts (save, undo, find, command palette, …)
+    const ed = parseEditorCommand(text);
+    if (ed) {
+      if (ed.action === 'precision') {
+        activatePrecision();
+        appendTranscript(`[${ed.label}]\n`);
+        return { ok: true, editor: ed.label };
+      }
+      appendTranscript(`[${ed.label}]\n`);
+      await window.yonie.pressKey({ key: ed.key, modifiers: ed.mods || [] });
+      return { ok: true, editor: ed.label };
+    }
     // Then try app/URL launchers (открой ютуб, найди коты, открой telegram…)
     const launch = parseLaunchCommand(text);
     if (launch) {
@@ -1097,6 +1162,107 @@ async function typeOrCommand(text) {
     }
   }
   return window.yonie.typeText(text);
+}
+
+// ---- Editor / system shortcut commands -------------------------------------------
+//
+// Каждая команда → конкретное сочетание клавиш (через nut-js → ОС).
+// Работает в любом активном приложении (VS Code, Safari, Notes, Figma, …).
+// `key` использует имена nut-js (S, Z, F, Space, Left, Grave, LeftBracket…).
+
+const EDITOR_COMMANDS = [
+  // ---- Files / project ----
+  { match: [/^сохрани(ть)?\b/i, /^сейв\b/i, /^save\b/i],
+    key: 'S', mods: ['cmd'], label: '💾 Save (⌘S)' },
+  { match: [/^сохрани всё/i, /^save all/i],
+    key: 'S', mods: ['cmd', 'alt'], label: '💾 Save All (⌥⌘S)' },
+  { match: [/^открой файл/i, /^файл\b/i, /^open file/i, /^quick open/i],
+    key: 'P', mods: ['cmd'], label: '📂 Quick Open (⌘P)' },
+  { match: [/^команд[ау]\b/i, /^палитр[ау]/i, /^command palette/i, /^команда\s*$/i],
+    key: 'P', mods: ['cmd', 'shift'], label: '⌘ Command Palette (⇧⌘P)' },
+
+  // ---- Edit ----
+  { match: [/^отмен[аи]?\b/i, /^undo\b/i],
+    key: 'Z', mods: ['cmd'], label: '↶ Undo (⌘Z)' },
+  { match: [/^верни?\b/i, /^повтори\b/i, /^redo\b/i],
+    key: 'Z', mods: ['cmd', 'shift'], label: '↷ Redo (⇧⌘Z)' },
+  { match: [/^вырежи\b/i, /^cut\b/i],
+    key: 'X', mods: ['cmd'], label: '✂ Cut (⌘X)' },
+  { match: [/^скопируй\b/i, /^копир(уй|овать)\b/i, /^copy\b/i],
+    key: 'C', mods: ['cmd'], label: '⎘ Copy (⌘C)' },
+  { match: [/^вставь\b/i, /^paste\b/i],
+    key: 'V', mods: ['cmd'], label: '⎗ Paste (⌘V)' },
+  { match: [/^выдели всё/i, /^select all/i],
+    key: 'A', mods: ['cmd'], label: '⌷ Select All (⌘A)' },
+  { match: [/^дублируй (строку|линию)/i, /^duplicate line/i],
+    key: 'Down', mods: ['shift', 'alt'], label: '↧ Duplicate line (⇧⌥↓)' },
+  { match: [/^удали строку/i, /^delete line/i],
+    key: 'K', mods: ['cmd', 'shift'], label: '✗ Delete line (⇧⌘K)' },
+  { match: [/^комментарий\b/i, /^закомментируй\b/i, /^comment\b/i, /^toggle comment/i],
+    key: 'Slash', mods: ['cmd'], label: '// Toggle comment (⌘/)' },
+  { match: [/^отступ\b/i, /^indent\b/i],
+    key: 'Tab', label: '→ Indent (Tab)' },
+  { match: [/^разотступ\b/i, /^outdent\b/i, /^убери отступ/i],
+    key: 'Tab', mods: ['shift'], label: '← Outdent (⇧Tab)' },
+
+  // ---- Find / replace ----
+  { match: [/^найди\b/i, /^поиск\b/i, /^find\b/i],
+    key: 'F', mods: ['cmd'], label: '🔍 Find (⌘F)' },
+  { match: [/^замени\b/i, /^замена\b/i, /^replace\b/i],
+    key: 'F', mods: ['cmd', 'alt'], label: '⇄ Replace (⌥⌘F)' },
+  { match: [/^найди в файлах/i, /^find in files/i, /^global find/i],
+    key: 'F', mods: ['cmd', 'shift'], label: '🔍 Find in files (⇧⌘F)' },
+  { match: [/^следующее( совпадение)?$/i, /^find next/i],
+    key: 'G', mods: ['cmd'], label: '↓ Next match (⌘G)' },
+  { match: [/^предыдущее( совпадение)?$/i, /^find previous/i],
+    key: 'G', mods: ['cmd', 'shift'], label: '↑ Prev match (⇧⌘G)' },
+
+  // ---- Tabs / windows ----
+  { match: [/^новая вкладка/i, /^new tab/i],
+    key: 'T', mods: ['cmd'], label: '➕ New tab (⌘T)' },
+  { match: [/^закрой вкладку/i, /^закрой окно/i, /^close tab/i, /^close window/i],
+    key: 'W', mods: ['cmd'], label: '✕ Close tab (⌘W)' },
+  { match: [/^верни вкладку/i, /^reopen tab/i],
+    key: 'T', mods: ['cmd', 'shift'], label: '↩ Reopen tab (⇧⌘T)' },
+  { match: [/^следующая вкладка/i, /^next tab/i],
+    key: 'Right', mods: ['cmd', 'alt'], label: '→ Next tab (⌥⌘→)' },
+  { match: [/^предыдущая вкладка/i, /^prev(ious)? tab/i],
+    key: 'Left', mods: ['cmd', 'alt'], label: '← Prev tab (⌥⌘←)' },
+  { match: [/^следующее окно/i, /^next window/i, /^cmd tab/i],
+    key: 'Tab', mods: ['cmd'], label: '⇄ Next window (⌘Tab)' },
+
+  // ---- Navigation (browser/editor) ----
+  { match: [/^назад\b/i, /^back\b/i],
+    key: 'LeftBracket', mods: ['cmd'], label: '← Back (⌘[)' },
+  { match: [/^вперёд\b/i, /^вперед\b/i, /^forward\b/i],
+    key: 'RightBracket', mods: ['cmd'], label: '→ Forward (⌘])' },
+  { match: [/^обнови\b/i, /^перезагрузи\b/i, /^reload\b/i, /^refresh\b/i],
+    key: 'R', mods: ['cmd'], label: '↻ Reload (⌘R)' },
+
+  // ---- Terminal / system ----
+  { match: [/^терминал\b/i, /^консоль\b/i, /^terminal\b/i, /^toggle terminal/i],
+    key: 'Grave', mods: ['ctrl'], label: '▷_ Toggle terminal (⌃`)' },
+  { match: [/^spotlight\b/i, /^споt?лайт\b/i, /^прожектор\b/i],
+    key: 'Space', mods: ['cmd'], label: '🔎 Spotlight (⌘Space)' },
+  { match: [/^скриншот\b/i, /^screenshot\b/i],
+    key: '4', mods: ['cmd', 'shift'], label: '📸 Screenshot (⇧⌘4)' },
+  { match: [/^mission control/i, /^экспозе\b/i],
+    key: 'Up', mods: ['ctrl'], label: '🗂 Mission Control (⌃↑)' },
+  { match: [/^спрячь окно/i, /^hide window/i, /^скрой окно/i],
+    key: 'H', mods: ['cmd'], label: '↧ Hide app (⌘H)' },
+
+  // ---- Special: precision mode (handled in typeOrCommand) ----
+  { match: [/^точно\b/i, /^точность\b/i, /^прицел\b/i, /^precision\b/i],
+    action: 'precision', label: '🎯 Precision mode' },
+];
+
+function parseEditorCommand(rawText) {
+  const t = normalizePhrase(rawText);
+  if (!t) return null;
+  for (const c of EDITOR_COMMANDS) {
+    for (const r of c.match) if (r.test(t)) return c;
+  }
+  return null;
 }
 
 // ---- Launch (open URL / app) commands --------------------------------------------

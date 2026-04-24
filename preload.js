@@ -12,7 +12,13 @@ contextBridge.exposeInMainWorld('yonie', {
   release: (button) => ipcRenderer.invoke('cursor:release', button),
   scroll: (dx, dy) => ipcRenderer.invoke('cursor:scroll', { dx, dy }),
   typeText: (text) => ipcRenderer.invoke('keyboard:type', text),
-  pressKey: (keyName) => ipcRenderer.invoke('keyboard:key', keyName),
+  // pressKey accepts either a string ('Enter') or { key: 'S', modifiers: ['cmd','shift'] }.
+  pressKey: (keyOrSpec, modifiers) => {
+    const payload = typeof keyOrSpec === 'string' && modifiers
+      ? { key: keyOrSpec, modifiers }
+      : keyOrSpec;
+    return ipcRenderer.invoke('keyboard:key', payload);
+  },
   whisper: (base64, mime, lang) => ipcRenderer.invoke('whisper:transcribe', { base64, mime, lang }),
   whisperLocal: (wavBase64, lang) => ipcRenderer.invoke('whisper:local', { wavBase64, lang }),
   whisperStatus: () => ipcRenderer.invoke('whisper:status'),
@@ -25,6 +31,11 @@ contextBridge.exposeInMainWorld('yonie', {
   windowSetMode: (mode) => ipcRenderer.invoke('window:setMode', mode),
   barStatus: (status) => ipcRenderer.invoke('bar:status', status),
   launch: (spec) => ipcRenderer.invoke('app:launch', spec),
+  crosshair: {
+    show: () => ipcRenderer.invoke('crosshair:show'),
+    hide: () => ipcRenderer.invoke('crosshair:hide'),
+    move: (x, y) => ipcRenderer.invoke('crosshair:move', { x, y }),
+  },
   quit: () => ipcRenderer.invoke('app:quit'),
 });
 

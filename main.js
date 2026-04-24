@@ -319,16 +319,43 @@ ipcMain.handle('keyboard:type', async (_e, text) => {
   }
 });
 
-ipcMain.handle('keyboard:key', async (_e, keyName) => {
+ipcMain.handle('keyboard:key', async (_e, payload) => {
   const n = getNut();
   if (!n) return { ok: false, reason: 'no-nut' };
+  // Backwards-compatible: accepts either a plain key name string,
+  // or { key: 'S', modifiers: ['cmd','shift'] } for shortcut combos.
+  let keyName, modifiers = [];
+  if (typeof payload === 'string') {
+    keyName = payload;
+  } else if (payload && typeof payload === 'object') {
+    keyName = payload.key;
+    modifiers = Array.isArray(payload.modifiers) ? payload.modifiers : [];
+  }
+  if (!keyName) return { ok: false, reason: 'no-key' };
+
+  // Map common modifier aliases → nut-js Key constants.
+  const modMap = {
+    cmd: 'LeftCmd', meta: 'LeftCmd', super: 'LeftCmd', win: 'LeftCmd',
+    shift: 'LeftShift',
+    alt: 'LeftAlt', option: 'LeftAlt', opt: 'LeftAlt',
+    ctrl: 'LeftControl', control: 'LeftControl',
+    fn: 'Fn',
+  };
+  const modKeys = modifiers
+    .map((m) => n.Key[modMap[String(m).toLowerCase()] || m])
+    .filter((k) => k !== undefined);
+  const main = n.Key[keyName];
+  if (main === undefined) return { ok: false, reason: 'unknown-key:' + keyName };
+
   try {
-    const key = n.Key[keyName];
-    if (key === undefined) return { ok: false, reason: 'unknown-key' };
-    await n.keyboard.pressKey(key);
-    await n.keyboard.releaseKey(key);
+    for (const mk of modKeys) await n.keyboard.pressKey(mk);
+    await n.keyboard.pressKey(main);
+    await n.keyboard.releaseKey(main);
+    for (const mk of [...modKeys].reverse()) await n.keyboard.releaseKey(mk);
     return { ok: true };
   } catch (err) {
+    // Make sure we don't leave any modifier stuck if something blew up mid-combo.
+    try { for (const mk of [...modKeys].reverse()) await n.keyboard.releaseKey(mk); } catch {}
     return { ok: false, reason: err.message };
   }
 });
@@ -425,6 +452,62 @@ ipcMain.handle('app:open-system-settings', async (_e, pane) => {
 });
 
 ipcMain.handle('app:dialog', async (_e, opts) => dialog.showMessageBox(mainWindow, opts));
+
+// --- Crosshair overlay window (precision mode) -----------------------------------
+
+let crosshairWindow = null;
+const CROSS_W = 96, CROSS_H = 96;
+
+function ensureCrosshairWindow() {
+  if (crosshairWindow && !crosshairWindow.isDestroyed()) return crosshairWindow;
+  crosshairWindow = new BrowserWindow({
+    width: CROSS_W,
+    height: CROSS_H,
+    transparent: true,
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  crosshairWindow.setIgnoreMouseEvents(true, { forward: false });
+  crosshairWindow.setAlwaysOnTop(true, 'screen-saver');
+  crosshairWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  crosshairWindow.loadFile('crosshair.html');
+  return crosshairWindow;
+}
+
+ipcMain.handle('crosshair:show', () => {
+  const w = ensureCrosshairWindow();
+  w.showInactive();
+  return { ok: true };
+});
+ipcMain.handle('crosshair:hide', () => {
+  if (crosshairWindow && !crosshairWindow.isDestroyed()) crosshairWindow.hide();
+  return { ok: true };
+});
+ipcMain.handle('crosshair:move', (_e, { x, y }) => {
+  if (!crosshairWindow || crosshairWindow.isDestroyed() || !crosshairWindow.isVisible()) return;
+  // x,y come in screen coords (already DIP from renderer); center the window on them.
+  crosshairWindow.setBounds({
+    x: Math.round(x - CROSS_W / 2),
+    y: Math.round(y - CROSS_H / 2),
+    width: CROSS_W,
+    height: CROSS_H,
+  }, false);
+});
 
 // --- Launch URLs / macOS apps via voice commands ----------------------------------
 
