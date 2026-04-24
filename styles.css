@@ -624,3 +624,34 @@ kbd {
   .gesture-head { display: none; }
 }
 
+/* ---------- Voice gate row (Стоп / Слушай) ---------- */
+.voice-gate-row {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-2) 0 var(--s-3);
+  flex-wrap: wrap;
+}
+.voice-gate-row .hint-text {
+  font-size: 12.5px; color: var(--c-fg-3);
+  flex: 1; min-width: 220px;
+}
+.voice-gate-row .hint-text b { color: var(--c-fg); font-weight: 600; }
+#voiceGateBadge {
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  padding: 5px 10px; border-radius: 999px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  color: var(--c-fg-2);
+  transition: background .18s, color .18s, box-shadow .18s, border-color .18s;
+}
+#voiceGateBadge.listening {
+  color: #16a34a;
+  border-color: rgba(22,163,74,.4);
+  background: rgba(22,163,74,.10);
+  box-shadow: 0 0 0 3px rgba(22,163,74,.08);
+}
+#voiceGateBadge.muted {
+  color: #d97706;
+  border-color: rgba(217,119,6,.45);
+  background: rgba(217,119,6,.12);
+  box-shadow: 0 0 0 3px rgba(217,119,6,.10);
+}

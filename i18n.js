@@ -96,6 +96,12 @@
       'voice.continuous_d':'Автоматически нарезает речь по тишине и печатает фразы.',
       'voice.transcript_ph':'Здесь появится распознанный текст. Команды: «клик», «пауза», «продолжи», «открой ютуб / телеграм», «найди коты в шапках».',
 
+      'voice.gate_hint_a':       'Скажи',
+      'voice.gate_hint_b':       'печать с голоса остановится',
+      'voice.gate_hint_c':       'снова включится',
+      'voice.gate_state_listen': '🎙 слушаю',
+      'voice.gate_state_muted':  '🔇 не слышу',
+
       'hf.title':            'Hands-free поведение',
       'hf.lede':              'Чтобы пользоваться без рук — даже при ошибках камеры.',
       'hf.autostart_t':      'Автозапуск при открытии',
@@ -197,6 +203,9 @@
       'd.cmd_log':           '[команда: {cmd}]',
       'd.launch_log':        '[запуск: {label}]',
       'd.search_label':      'поиск «{q}»',
+      'd.muted':             '🔇 Печать с голоса выключена. Скажи «слушай», чтобы продолжить.',
+      'd.listening':         '🎙 Печать с голоса снова включена.',
+      'd.muted_log':         '[пропущено: «{text}»]',
     },
 
     /* ===================== ENGLISH ===================== */
@@ -281,6 +290,12 @@
       'voice.continuous_t':'Continuous mode',
       'voice.continuous_d':'Automatically slices speech by silence and types out phrases.',
       'voice.transcript_ph':'Recognized text appears here. Commands: “click”, “pause”, “resume”, “open youtube / telegram”, “search cats in hats”.',
+
+      'voice.gate_hint_a':       'Say',
+      'voice.gate_hint_b':       'voice typing turns off',
+      'voice.gate_hint_c':       'turns back on',
+      'voice.gate_state_listen': '🎙 listening',
+      'voice.gate_state_muted':  '🔇 muted',
 
       'hf.title':            'Hands-free behavior',
       'hf.lede':              'For using the Mac without hands — even when the camera glitches.',
@@ -374,6 +389,9 @@
       'd.cmd_log':           '[command: {cmd}]',
       'd.launch_log':        '[launch: {label}]',
       'd.search_label':      'search “{q}”',
+      'd.muted':             '🔇 Voice typing is off. Say “listen” to resume.',
+      'd.listening':         '🎙 Voice typing is back on.',
+      'd.muted_log':         '[muted: “{text}”]',
     },
 
     /* ===================== KAZAKH ===================== */
@@ -458,6 +476,12 @@
       'voice.continuous_t':'Үздіксіз режим',
       'voice.continuous_d':'Сөйлеуді үнсіздік бойынша автоматты бөлеп, фразаларды теріп шығарады.',
       'voice.transcript_ph':'Танылған мәтін осында пайда болады. Командалар: «бас», «тоқта», «жалғастыр», «аш ютуб / телеграм», «тап мысықтар».',
+
+      'voice.gate_hint_a':       'Айт',
+      'voice.gate_hint_b':       'дауыспен теру тоқтайды',
+      'voice.gate_hint_c':       'қайта қосылады',
+      'voice.gate_state_listen': '🎙 тыңдап тұрмын',
+      'voice.gate_state_muted':  '🔇 тыңдамаймын',
 
       'hf.title':            'Қолсыз режим параметрлері',
       'hf.lede':              'Қолды қолданбай пайдалану үшін — камера ақаулары кезінде де.',
@@ -551,6 +575,9 @@
       'd.cmd_log':           '[команда: {cmd}]',
       'd.launch_log':        '[іске қосу: {label}]',
       'd.search_label':      '«{q}» іздеу',
+      'd.muted':             '🔇 Дауыспен теру өшірілді. Жалғастыру үшін «тыңда» деп айтыңыз.',
+      'd.listening':         '🎙 Дауыспен теру қайта қосылды.',
+      'd.muted_log':         '[өткізілді: «{text}»]',
     },
 
     /* ===================== TURKISH ===================== */
@@ -635,6 +662,12 @@
       'voice.continuous_t':'Sürekli mod',
       'voice.continuous_d':'Konuşmayı sessizliğe göre otomatik böler ve cümleleri yazar.',
       'voice.transcript_ph':'Tanınan metin burada görünür. Komutlar: “tıkla”, “dur”, “devam”, “youtube aç / telegram”, “kedi ara”.',
+
+      'voice.gate_hint_a':       'Söyle',
+      'voice.gate_hint_b':       'sesli yazma kapanır',
+      'voice.gate_hint_c':       'tekrar açılır',
+      'voice.gate_state_listen': '🎙 dinliyorum',
+      'voice.gate_state_muted':  '🔇 sessize aldım',
 
       'hf.title':            'Eller serbest davranışı',
       'hf.lede':              'Kamera arıza yapsa bile elleri kullanmadan çalışmak için.',
@@ -728,6 +761,9 @@
       'd.cmd_log':           '[komut: {cmd}]',
       'd.launch_log':        '[başlat: {label}]',
       'd.search_label':      '“{q}” ara',
+      'd.muted':             '🔇 Sesli yazma kapalı. Devam etmek için “dinle” de.',
+      'd.listening':         '🎙 Sesli yazma yine açık.',
+      'd.muted_log':         '[atlandı: “{text}”]',
     },
   };
 

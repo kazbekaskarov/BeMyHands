@@ -199,6 +199,9 @@ if (window.i18n && window.i18n.onChange) {
     // Update dynamic strings that aren't covered by data-i18n.
     setBtnLabel(toggleBtn, controlEnabled ? t('overview.stop') : t('overview.start'));
     setBtnLabel(voiceBtn,  voiceActive    ? t('voice.stop')    : t('voice.start'));
+    // Voice gate badge text follows the language too.
+    const badge = document.getElementById('voiceGateBadge');
+    if (badge) badge.textContent = voiceMuted ? t('voice.gate_state_muted') : t('voice.gate_state_listen');
     // Re-render the current status line so reason/mode badges follow the new language.
     try {
       const pill = document.getElementById('statusPill');
@@ -1108,15 +1111,37 @@ function togglePause() {
 }
 
 // ---- Voice commands ----
+// "voiceMute" / "voiceListen" — отдельная пара для отключения именно ПЕЧАТИ С ГОЛОСА
+// (курсор остаётся работать). "пауза" / "продолжи" по-прежнему управляют курсором.
+let voiceMuted = false;
+
+// Initial paint of the gate badge (listening state).
+queueMicrotask(() => {
+  const b = document.getElementById('voiceGateBadge');
+  if (b) b.classList.add('listening');
+});
+
 const VOICE_COMMANDS = {
-  pause:        [/^\s*пауза\b/i,        /^\s*стоп\b/i,        /^\s*остановись\b/i,
-                  /^\s*pause\b/i,        /^\s*stop\b/i,
-                  /^\s*тоқта/i,          /^\s*кідір/i,
-                  /^\s*dur\b/i,          /^\s*duraklat\b/i],
+  pause:        [/^\s*пауза\b/i,        /^\s*остановись\b/i,
+                  /^\s*pause\b/i,
+                  /^\s*кідір/i,
+                  /^\s*duraklat\b/i],
   resume:       [/^\s*продолж/i,         /^\s*старт\b/i,
                   /^\s*resume\b/i,       /^\s*start\b/i,
                   /^\s*жалғастыр/i,      /^\s*бастау\b/i,      /^\s*іске қос/i,
                   /^\s*devam\b/i,        /^\s*başla\b/i],
+
+  // ↓ NEW: voice typing on/off
+  voiceMute:    [/^\s*стоп\s*$/i,        /^\s*стой\s*$/i,        /^\s*молчи\s*$/i,
+                  /^\s*хватит\s*$/i,
+                  /^\s*stop\s*$/i,        /^\s*mute\s*$/i,        /^\s*shh+\s*$/i,
+                  /^\s*тоқта\s*$/i,       /^\s*үндеме\s*$/i,      /^\s*тыңдама\s*$/i,
+                  /^\s*dur\s*$/i,         /^\s*sus\s*$/i],
+  voiceListen:  [/^\s*слушай\s*$/i,      /^\s*слышишь\s*$/i,
+                  /^\s*listen\s*$/i,      /^\s*unmute\s*$/i,
+                  /^\s*тыңда\s*$/i,       /^\s*тыңдашы\s*$/i,
+                  /^\s*dinle\s*$/i],
+
   recalibrate:  [/^\s*калибровк/i,       /^\s*откалибруй/i,    /^\s*калибруй/i,
                   /^\s*центр\b/i,         /^\s*центрируй/i,
                   /^\s*recalibrate\b/i,   /^\s*recenter\b/i,    /^\s*calibrate\b/i,
@@ -1177,6 +1202,8 @@ async function executeVoiceCommand(cmd) {
   switch (cmd) {
     case 'pause':       userPaused = true;  setStatus(t('d.paused') + ' (voice)', 'warn'); break;
     case 'resume':      userPaused = false; setStatus(t('d.resumed'), 'ok'); break;
+    case 'voiceMute':   setVoiceMuted(true);  break;
+    case 'voiceListen': setVoiceMuted(false); break;
     case 'recalibrate': voiceCalibrate(); break;
     case 'click':       window.yonie.click('left'); break;
     case 'rightClick':  window.yonie.click('right'); break;
@@ -1191,10 +1218,34 @@ async function executeVoiceCommand(cmd) {
   }
 }
 
+// Update UI badge + transcript message when voice typing is muted/unmuted.
+function setVoiceMuted(muted) {
+  voiceMuted = muted;
+  const badge = document.getElementById('voiceGateBadge');
+  if (badge) {
+    badge.textContent = muted ? t('voice.gate_state_muted') : t('voice.gate_state_listen');
+    badge.classList.toggle('muted', muted);
+    badge.classList.toggle('listening', !muted);
+  }
+  appendTranscript((muted ? t('d.muted') : t('d.listening')) + '\n');
+}
+
 // Hook the voice command parser into the typing pipeline.
 // IMPORTANT: window.yonie is frozen (contextBridge), so we cannot mutate it.
 // Instead, all voice paths call typeOrCommand() which checks for a command first.
 async function typeOrCommand(text) {
+  // Voice mute gate: when muted, NOTHING is typed and only "слушай / listen" is acted on.
+  // Everything else gets logged to the transcript with a [muted] marker.
+  if (voiceMuted) {
+    const cmd = parseVoiceCommand(text);
+    if (cmd === 'voiceListen') {
+      await executeVoiceCommand(cmd);
+      return { ok: true, command: cmd };
+    }
+    appendTranscript(tf('d.muted_log', { text: text.trim() }) + '\n');
+    return { ok: true, muted: true };
+  }
+
   if (voiceCommandsEl?.checked) {
     const cmd = parseVoiceCommand(text);
     if (cmd) {
