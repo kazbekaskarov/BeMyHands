@@ -536,11 +536,22 @@ function fireGesture(action, now) {
 }
 
 // -------------------- UI: cursor control --------------------
+// Helper: update a button's text label without wiping its SVG icon child.
+function setBtnLabel(btn, text) {
+  // Find an existing <span> inside the button (icons are <svg>, label is <span>).
+  let label = btn.querySelector('span:not(.ico)');
+  if (!label) {
+    label = document.createElement('span');
+    btn.appendChild(label);
+  }
+  label.textContent = text;
+}
+
 toggleBtn.addEventListener('click', async () => {
   controlEnabled = !controlEnabled;
   await window.yonie.setControlEnabled(controlEnabled);
   toggleBtn.classList.toggle('active', controlEnabled);
-  toggleBtn.textContent = controlEnabled ? '⏸ Остановить управление' : '▶ Включить управление курсором';
+  setBtnLabel(toggleBtn, controlEnabled ? 'Остановить управление' : 'Включить управление');
   if (!controlEnabled) {
     // Safety: release any held mouse button and exit modal modes when control is disabled.
     if (dragActive) { try { await window.yonie.release('left'); } catch {} dragActive = false; }
@@ -601,7 +612,7 @@ voiceBtn.addEventListener('click', async () => {
 function setVoiceUI(on) {
   voiceActive = on;
   voiceBtn.classList.toggle('active', on);
-  voiceBtn.textContent = on ? '⏹ Остановить голос' : '🎙 Начать голосовой ввод';
+  setBtnLabel(voiceBtn, on ? 'Остановить голос' : 'Начать голосовой ввод');
 }
 
 function startWebSpeech() {
@@ -1134,11 +1145,25 @@ setInterval(() => {
   const cd = document.getElementById('chipDelegate');
   const cf = document.getElementById('chipFps');
   const cF = document.getElementById('chipFace');
-  if (cd) cd.textContent = `⚙️ ${mpDelegate || '—'}`;
+  if (cd) cd.textContent = `${mpDelegate || '—'}`;
   if (cf) cf.textContent = video.videoWidth
-    ? `📷 ${video.videoWidth}×${video.videoHeight} · ${fps}fps`
-    : '📷 нет потока';
-  if (cF) cF.textContent = faceFps > 0 ? `🙂 лицо ${faceFps}/с` : '😶 нет лица';
+    ? `${video.videoWidth}×${video.videoHeight} · ${fps}fps`
+    : 'нет потока';
+  if (cF) cF.textContent = faceFps > 0 ? `лицо ${faceFps}/с` : 'нет лица';
+
+  // Overview stat tiles
+  const ssState = document.getElementById('stat-state');
+  const ssFps   = document.getElementById('stat-fps');
+  const ssModel = document.getElementById('stat-model');
+  if (ssState) {
+    let s = 'Готов';
+    if (userPaused)             s = 'Пауза';
+    else if (faceLost)          s = 'Нет лица';
+    else if (controlEnabled)    s = 'Активно';
+    ssState.textContent = s;
+  }
+  if (ssFps) ssFps.textContent = video.videoWidth ? `${faceFps}/${fps}` : '—';
+  if (ssModel) ssModel.textContent = `MediaPipe · ${mpDelegate || '—'}`;
 
   // Keep camera card glow in sync even between explicit setStatus() calls.
   const camWrap = document.getElementById('camWrap');
