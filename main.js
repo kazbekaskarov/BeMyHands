@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const intentEngine = require('./intent-engine');
 
 // Keep timers/JS at full speed even when the window is minimized or hidden.
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -188,6 +189,48 @@ function detectLocalWhisper() {
 const TMP_DIR = path.join(os.tmpdir(), 'yonie-whisper');
 try { fs.mkdirSync(TMP_DIR, { recursive: true }); } catch {}
 
+// Whisper часто галлюцинирует «титры» из обучающих данных YouTube на тишине/шуме.
+// Фильтруем известные паттерны построчно и целиком.
+const HALLUCINATION_PATTERNS = [
+  // Любое упоминание «субтитры/субтитров/субтитра» — пользователь их не диктует.
+  /субтитр/i,
+  /altyaz[ıi]/i,         // «субтитры» по-турецки
+  /субтитл/i,            // редкая орфография
+  // «Спасибо …» ‑комбо (часто галлюцинация на тишине)
+  /спасибо\s+за\s+(?:просмотр|внимание|подписку|субтитр)/i,
+  /спасибо,\s+что\s+смотрели/i,
+  // Каналы / подписки
+  /продолжение\s+следует/i,
+  /подпис(?:ывайтесь|ка|ывайся|ь)\s+на\s+канал/i,
+  /ставьте\s+лайк/i,
+  /до\s+новых\s+встреч/i,
+  /всем\s+пока[!.…]?$/i,
+  // English YouTube credits
+  /subtitles?\s+by\s+/i,
+  /transcribed\s+by\s+/i,
+  /thanks?\s+for\s+watching/i,
+  /(?:please\s+)?(?:like|subscribe)\s+(?:and|to)/i,
+  /\.com\/subtitles?/i,
+];
+
+function stripWhisperHallucinations(raw) {
+  if (!raw) return '';
+  const lines = raw.split(/\r?\n/);
+  const kept = [];
+  for (let line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    if (HALLUCINATION_PATTERNS.some((re) => re.test(t))) continue;
+    kept.push(t);
+  }
+  let out = kept.join('\n').trim();
+  // Финальная зачистка хвостовой строки галлюцинации (на случай склейки)
+  for (const re of HALLUCINATION_PATTERNS) {
+    out = out.replace(new RegExp(re.source + '.*$', re.flags.includes('i') ? 'i' : ''), '').trim();
+  }
+  return out;
+}
+
 // macOS: request camera + microphone permissions up-front for a smoother UX.
 async function ensureMediaPermissions() {
   if (process.platform !== 'darwin') return;
@@ -209,6 +252,11 @@ app.whenReady().then(async () => {
   try { powerSaveBlocker.start('prevent-display-sleep'); } catch {}
   createWindow();
   createBarWindow();
+
+  // Прогреваем локальный intent-классификатор в фоне (модель ~120 MB при первом запуске).
+  setTimeout(() => {
+    intentEngine.loadPipeline().catch((e) => console.warn('[intent] preload failed:', e?.message || e));
+  }, 1500);
 
   app.on('activate', () => {
     if (!mainWindow || mainWindow.isDestroyed()) createWindow();
@@ -364,6 +412,16 @@ ipcMain.handle('keyboard:key', async (_e, payload) => {
 
 ipcMain.handle('whisper:status', () => detectLocalWhisper());
 
+// ---- Local intent classifier (semantic command matcher) ---------------------------
+ipcMain.handle('intent:status', () => intentEngine.getStatus());
+ipcMain.handle('intent:warmup', async () => {
+  try { await intentEngine.loadPipeline(); return { ok: true, status: intentEngine.getStatus() }; }
+  catch (e) { return { ok: false, reason: e.message, status: intentEngine.getStatus() }; }
+});
+ipcMain.handle('intent:classify', async (_e, { text, threshold, margin }) => {
+  return intentEngine.classify(text, { threshold, margin });
+});
+
 ipcMain.handle('whisper:local', async (_e, { wavBase64, lang }) => {
   const det = detectLocalWhisper();
   if (!det.ok) {
@@ -382,6 +440,10 @@ ipcMain.handle('whisper:local', async (_e, { wavBase64, lang }) => {
       '-l', lang || 'auto',
       '-bs', '5',     // beam size
       '-bo', '5',     // best of
+      '--suppress-nst',          // suppress non-speech tokens (титры/смех/музыка)
+      '-nth', '0.6',             // no-speech threshold (выше → агрессивнее режет тишину)
+      '-lpt', '-0.8',            // logprob threshold — отбрасывать неуверенные сегменты
+      '-et', '2.4',              // entropy threshold — отбрасывать «бредовые» сегменты
     ];
     // Allow translation to English via env if needed.
     if (process.env.WHISPER_TRANSLATE === '1') args.push('-tr');
@@ -401,10 +463,12 @@ ipcMain.handle('whisper:local', async (_e, { wavBase64, lang }) => {
     // Clean stdout: remove [BLANK_AUDIO], (...) tags, trim.
     const clean = text
       .replace(/\[[A-Z_ ]+\]/g, '')
+      .replace(/\([^)]*\)/g, '')
       .replace(/\s+\n/g, '\n')
       .trim();
 
-    return { ok: true, text: clean };
+    const filtered = stripWhisperHallucinations(clean);
+    return { ok: true, text: filtered };
   } catch (err) {
     return { ok: false, reason: err.message };
   } finally {
@@ -434,7 +498,7 @@ ipcMain.handle('whisper:transcribe', async (_e, { base64, mime, lang }) => {
       return { ok: false, reason: `openai ${res.status}: ${txt}` };
     }
     const json = await res.json();
-    return { ok: true, text: json.text || '' };
+    return { ok: true, text: stripWhisperHallucinations(json.text || '') };
   } catch (err) {
     return { ok: false, reason: err.message };
   }

@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('yonie', {
   whisper: (base64, mime, lang) => ipcRenderer.invoke('whisper:transcribe', { base64, mime, lang }),
   whisperLocal: (wavBase64, lang) => ipcRenderer.invoke('whisper:local', { wavBase64, lang }),
   whisperStatus: () => ipcRenderer.invoke('whisper:status'),
+  intent: {
+    classify: (text, opts) => ipcRenderer.invoke('intent:classify', { text, ...(opts || {}) }),
+    status: () => ipcRenderer.invoke('intent:status'),
+    warmup: () => ipcRenderer.invoke('intent:warmup'),
+  },
   openSystemSettings: (pane) => ipcRenderer.invoke('app:open-system-settings', pane),
   dialog: (opts) => ipcRenderer.invoke('app:dialog', opts),
   // Hands-free helpers

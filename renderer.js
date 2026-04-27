@@ -113,6 +113,12 @@ window.yonie.onBootstrap((b) => {
   // Restore saved configuration (helper set this up earlier).
   applyConfig(b.config || {});
 
+  // Локальная модель распознавания команд (TF-IDF, без сети) — мгновенная.
+  if (window.yonie?.intent) {
+    window.yonie.intent.warmup().then((res) => {
+      if (res?.ok) appendTranscript(`[intent] локальный классификатор готов: ${res.status?.intents || 0} намерений\n`);
+    });
+  }
   // Auto-start cursor + voice ONLY when the user opted in via the checkbox.
   // Read straight from the DOM (applyConfig set it) so we always reflect the
   // current persisted state — even if b.config and the checkbox got out of sync.
@@ -1271,9 +1277,51 @@ async function typeOrCommand(text) {
       await window.yonie.launch(launch.spec);
       return { ok: true, launched: launch.label };
     }
+    // ---- Semantic fallback: спрашиваем локальную модель «по смыслу» ----
+    const sem = await classifySemantic(text);
+    if (sem) return sem;
   }
   return window.yonie.typeText(text);
 }
+
+// Локальная семантическая классификация (transformers.js / MiniLM) — фолбэк
+// после промаха всех регекс-парсеров. Вызывается только если voiceCommands включены
+// и пользователь не отключил semantic в настройках.
+async function classifySemantic(text) {
+  if (!window.yonie?.intent?.classify) return null;
+  if (semanticIntentsEnabled === false) return null;
+  try {
+    const res = await window.yonie.intent.classify(text, {
+      threshold: semanticThreshold,
+      margin: 0.06,
+    });
+    if (!res?.ok) return null;
+    const it = res.intent;
+    const scoreTag = `~${(res.score * 100).toFixed(0)}%`;
+    if (it.kind === 'voice') {
+      appendTranscript(`[${it.intent} ${scoreTag}]\n`);
+      await executeVoiceCommand(it.intent);
+      return { ok: true, command: it.intent, semantic: true, score: res.score };
+    }
+    if (it.kind === 'editor') {
+      if (it.action === 'precision') {
+        activatePrecision();
+        appendTranscript(`[${it.label} ${scoreTag}]\n`);
+        return { ok: true, editor: it.label, semantic: true };
+      }
+      appendTranscript(`[${it.label} ${scoreTag}]\n`);
+      await window.yonie.pressKey({ key: it.key, modifiers: it.mods || [] });
+      return { ok: true, editor: it.label, semantic: true };
+    }
+  } catch (e) {
+    console.warn('[intent] classify failed:', e);
+  }
+  return null;
+}
+
+// Default semantic settings (могут переопределяться из window.yonie.configGet позже).
+let semanticIntentsEnabled = true;
+let semanticThreshold = 0.42;
 
 // ---- Editor / system shortcut commands -------------------------------------------
 //
