@@ -54,7 +54,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 980,
     height: 720,
-    title: 'BeMyHands — Face & Voice Control',
+    title: 'Qolda — Face & Voice Control',
     backgroundColor: '#07090f',
     show: !startHidden,
     webPreferences: {

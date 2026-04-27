@@ -1,4 +1,4 @@
-/* BeMyHands — i18n
+/* Qolda — i18n
  * Lightweight, no deps. Languages: ru, en, kk, tr.
  *
  * Usage in HTML:
@@ -15,7 +15,7 @@
   const DICT = {
     /* ===================== RUSSIAN ===================== */
     ru: {
-      'app.title': 'BeMyHands',
+      'app.title': 'Qolda',
       'app.subtitle': 'управление лицом и голосом',
       'nav.overview':    'Обзор',
       'nav.cursor':      'Курсор',
@@ -210,7 +210,7 @@
 
     /* ===================== ENGLISH ===================== */
     en: {
-      'app.title': 'BeMyHands',
+      'app.title': 'Qolda',
       'app.subtitle': 'face & voice control',
       'nav.overview':    'Overview',
       'nav.cursor':      'Cursor',
@@ -396,7 +396,7 @@
 
     /* ===================== KAZAKH ===================== */
     kk: {
-      'app.title': 'BeMyHands',
+      'app.title': 'Qolda',
       'app.subtitle': 'бет және дауыспен басқару',
       'nav.overview':    'Шолу',
       'nav.cursor':      'Меңзер',
@@ -582,7 +582,7 @@
 
     /* ===================== TURKISH ===================== */
     tr: {
-      'app.title': 'BeMyHands',
+      'app.title': 'Qolda',
       'app.subtitle': 'yüz ve ses kontrolü',
       'nav.overview':    'Genel',
       'nav.cursor':      'İmleç',

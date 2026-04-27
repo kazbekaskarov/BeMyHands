@@ -1,7 +1,7 @@
 {
-  "name": "bemyhands",
+  "name": "qolda",
   "version": "0.2.0",
-  "description": "BeMyHands — hands-free desktop control for macOS. Face tracking moves the cursor, voice typing inputs text. Designed for users who can't use a mouse or keyboard.",
+  "description": "Qolda — hands-free desktop control for macOS. Face tracking moves the cursor, voice typing inputs text. Designed for users who can't use a mouse or keyboard.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -13,8 +13,8 @@
   "author": "",
   "license": "MIT",
   "build": {
-    "appId": "com.bemyhands.app",
-    "productName": "BeMyHands",
+    "appId": "com.qolda.app",
+    "productName": "Qolda",
     "asar": true,
     "files": [
       "main.js",
@@ -59,12 +59,12 @@
       "gatekeeperAssess": false,
       "identity": null,
       "extendInfo": {
-        "NSCameraUsageDescription": "BeMyHands использует камеру для отслеживания движений лица.",
-        "NSMicrophoneUsageDescription": "BeMyHands использует микрофон для голосового ввода (Local Whisper)."
+        "NSCameraUsageDescription": "Qolda использует камеру для отслеживания движений лица.",
+        "NSMicrophoneUsageDescription": "Qolda использует микрофон для голосового ввода (Local Whisper)."
       }
     },
     "dmg": {
-      "title": "BeMyHands ${version}",
+      "title": "Qolda ${version}",
       "window": {
         "width": 540,
         "height": 380
