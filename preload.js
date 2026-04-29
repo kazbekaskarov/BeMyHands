@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('yonie', {
   whisper: (base64, mime, lang) => ipcRenderer.invoke('whisper:transcribe', { base64, mime, lang }),
   whisperLocal: (wavBase64, lang) => ipcRenderer.invoke('whisper:local', { wavBase64, lang }),
   whisperStatus: () => ipcRenderer.invoke('whisper:status'),
+  whisperDownloadModel: (model) => ipcRenderer.invoke('whisper:download-model', { model }),
+  onWhisperDownloadProgress: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('whisper:download-progress', listener);
+    return () => ipcRenderer.removeListener('whisper:download-progress', listener);
+  },
   intent: {
     classify: (text, opts) => ipcRenderer.invoke('intent:classify', { text, ...(opts || {}) }),
     status: () => ipcRenderer.invoke('intent:status'),

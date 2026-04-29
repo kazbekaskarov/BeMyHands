@@ -36,16 +36,50 @@
 
 ## Установка
 
+### Для пользователей (готовый DMG)
+
+1. Скачайте `Qolda-0.2.0-arm64.dmg` (Apple Silicon, ~96 MB).
+2. Откройте DMG → перетащите **Qolda** в папку Applications.
+3. **Важно (одноразово, для не-подписанных приложений из CDN):**
+   ```bash
+   xattr -cr /Applications/Qolda.app
+   ```
+   Без этой команды macOS Gatekeeper покажет «Qolda is damaged» — потому что
+   у нас нет Apple Developer ID (DMG ad-hoc подписан). Команда снимает
+   карантинный атрибут, наложенный на скачанные файлы.
+
+   Альтернатива: ПКМ по Qolda.app → **Open** (один раз подтвердить).
+
+4. Запустите Qolda. Дайте разрешения:
+   - Camera (для трекинга лица)
+   - Microphone (для голосового ввода)
+   - **Accessibility** (для управления курсором/клавиатурой) — System Settings → Privacy & Security → Accessibility → ✓ Qolda.
+
+5. При первом запуске Qolda предложит **скачать Whisper-модель large-v3 (~3 GB)**.
+   Жмите OK — она скачается в `~/Library/Application Support/Qolda/models/`
+   и больше не понадобится.
+
+> ⚙️ Whisper-cli и все его dylib'ы вшиты в DMG (вкл. Metal/BLAS бэкенды) —
+> Homebrew ставить не нужно.
+
+### Для разработчиков (из исходников)
+
 ```bash
 git clone <repo> Qolda
 cd Qolda
 npm install
-
-# Один раз: установить whisper.cpp и скачать модель (~3 ГБ для large-v3)
-brew install whisper-cpp
-npm run setup
-
+brew install whisper-cpp           # для dev — на проде вшит в DMG
+npm run setup                      # скачает large-v3 в models/
 npm start
+```
+
+### Сборка DMG из исходников
+
+```bash
+brew install whisper-cpp           # источник для bundling'а
+npm install
+npm run dist                       # автоматически вызовет bundle:whisper
+                                   # → dist/Qolda-<ver>-arm64.dmg
 ```
 
 > При первом запуске macOS попросит доступ к **камере** и **микрофону**. После — нужно вручную выдать **Accessibility** (см. ниже).

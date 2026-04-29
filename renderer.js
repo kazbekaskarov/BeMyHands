@@ -799,16 +799,57 @@ async function startWhisper() {
 
 // ---- Local Whisper (whisper.cpp via main process) ---------------------------------
 
+// При первом запуске модель (~3 GB для large-v3) не входит в DMG — качаем её
+// в userData с прогресс-баром в transcript.
+function fmtMB(b) { return (b / 1e6).toFixed(1) + ' MB'; }
+
+async function ensureModelDownloaded(st) {
+  const modelName = (st && st.modelName) || 'large-v3';
+  const proceed = confirm(
+    `Локальная модель Whisper (${modelName}) не найдена.\n\n` +
+    `Скачать ~3 GB сейчас?\n(один раз; сохранится в Application Support)`
+  );
+  if (!proceed) return false;
+
+  appendTranscript(`[whisper] начинаю загрузку модели ${modelName}…\n`);
+  let lastPct = -1;
+  const off = window.yonie.onWhisperDownloadProgress((p) => {
+    if (p.phase === 'progress' && p.total) {
+      const pct = Math.floor((p.received / p.total) * 100);
+      if (pct !== lastPct && pct % 5 === 0) {
+        lastPct = pct;
+        appendTranscript(`  ${pct}%  ${fmtMB(p.received)} / ${fmtMB(p.total)}\n`);
+      }
+    } else if (p.phase === 'done') {
+      appendTranscript(`[whisper] модель загружена: ${p.path}\n`);
+    } else if (p.phase === 'error') {
+      appendTranscript(`[whisper] ошибка загрузки: ${p.error}\n`);
+    }
+  });
+  try {
+    const res = await window.yonie.whisperDownloadModel(modelName);
+    return res?.ok === true;
+  } finally {
+    off?.();
+  }
+}
+
 async function startLocalWhisper() {
   // Check that the binary + model are present.
-  const st = await window.yonie.whisperStatus();
+  let st = await window.yonie.whisperStatus();
   if (!st.ok) {
     if (!st.cli) {
       appendTranscript(t('d.local_no_cli') + '\n');
-    } else {
-      appendTranscript(tf('d.local_no_model', { path: st.modelPath }) + '\n');
+      return;
     }
-    return;
+    // Бинарь есть, модели нет — предложим скачать с прогресс-баром.
+    const ok = await ensureModelDownloaded(st);
+    if (!ok) return;
+    st = await window.yonie.whisperStatus();
+    if (!st.ok) {
+      appendTranscript(tf('d.local_no_model', { path: st.modelPath }) + '\n');
+      return;
+    }
   }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({

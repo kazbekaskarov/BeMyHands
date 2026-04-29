@@ -170,9 +170,31 @@ ipcMain.handle('app:quit', () => { app.isQuiting = true; app.quit(); });
 
 // ---- Local Whisper (whisper.cpp) -------------------------------------------------
 
+// Resource path: при `npm start` (development) — рядом с проектом; в собранном app —
+// в Contents/Resources благодаря extraResources в electron-builder.
+function resourcesRoot() {
+  // app.isPackaged=true → process.resourcesPath = .../Qolda.app/Contents/Resources
+  if (app.isPackaged) return process.resourcesPath;
+  return __dirname;
+}
+
+const VENDOR_WHISPER_DIR = path.join(resourcesRoot(), 'vendor', 'whisper');
+const VENDOR_WHISPER_CLI = path.join(VENDOR_WHISPER_DIR, 'whisper-cli');
+const VENDOR_WHISPER_LIBS = path.join(VENDOR_WHISPER_DIR, 'libs');
+
+// Модели храним в userData (~/Library/Application Support/Qolda/models),
+// чтобы DMG был лёгким, а скачанная модель пережила обновления приложения.
+function userModelsDir() {
+  const dir = path.join(app.getPath('userData'), 'models');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+
 function detectLocalWhisper() {
+  // Приоритет: env override → bundled (vendor/whisper) → системный homebrew
   const cliCandidates = [
     process.env.WHISPER_CLI_PATH,
+    fs.existsSync(VENDOR_WHISPER_CLI) ? VENDOR_WHISPER_CLI : null,
     '/opt/homebrew/bin/whisper-cli',
     '/usr/local/bin/whisper-cli',
   ].filter(Boolean);
@@ -181,9 +203,14 @@ function detectLocalWhisper() {
     try { if (fs.existsSync(p)) { cli = p; break; } } catch {}
   }
   const modelName = process.env.WHISPER_MODEL || 'large-v3';
-  const modelPath = process.env.WHISPER_MODEL_PATH || path.join(__dirname, 'models', `ggml-${modelName}.bin`);
+  // Путь к модели: env override → userData/models/ → старая папка проекта (для dev совместимости)
+  const userModelPath = path.join(userModelsDir(), `ggml-${modelName}.bin`);
+  const devModelPath = path.join(__dirname, 'models', `ggml-${modelName}.bin`);
+  const modelPath = process.env.WHISPER_MODEL_PATH
+    || (fs.existsSync(userModelPath) ? userModelPath
+      : (fs.existsSync(devModelPath) ? devModelPath : userModelPath));
   const modelOk = fs.existsSync(modelPath);
-  return { ok: Boolean(cli && modelOk), cli, modelPath, modelName };
+  return { ok: Boolean(cli && modelOk), cli, modelPath, modelName, bundled: cli === VENDOR_WHISPER_CLI };
 }
 
 const TMP_DIR = path.join(os.tmpdir(), 'yonie-whisper');
@@ -412,6 +439,71 @@ ipcMain.handle('keyboard:key', async (_e, payload) => {
 
 ipcMain.handle('whisper:status', () => detectLocalWhisper());
 
+// ---- Model downloader (whisper.cpp GGML) ------------------------------------------
+// Стримим прогресс через ipcRenderer 'whisper:download-progress'.
+const https = require('https');
+let downloadInFlight = null;
+
+ipcMain.handle('whisper:download-model', async (e, { model } = {}) => {
+  if (downloadInFlight) return { ok: false, reason: 'already-downloading' };
+  const m = model || process.env.WHISPER_MODEL || 'large-v3';
+  const fname = `ggml-${m}.bin`;
+  const dst = path.join(userModelsDir(), fname);
+  if (fs.existsSync(dst)) return { ok: true, path: dst, alreadyPresent: true };
+
+  const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${fname}`;
+  const tmp = dst + '.part';
+  try { fs.unlinkSync(tmp); } catch {}
+
+  const sender = e.sender;
+  const send = (payload) => { try { sender.send('whisper:download-progress', payload); } catch {} };
+
+  downloadInFlight = (async () => {
+    let lastEmit = 0;
+    const get = (u) => new Promise((resolve, reject) => {
+      const req = https.get(u, (res) => {
+        if ([301, 302, 307, 308].includes(res.statusCode)) {
+          res.resume();
+          return resolve(get(res.headers.location));
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        const total = parseInt(res.headers['content-length'] || '0', 10);
+        let received = 0;
+        const file = fs.createWriteStream(tmp);
+        send({ phase: 'start', total });
+        res.on('data', (chunk) => {
+          received += chunk.length;
+          const now = Date.now();
+          if (now - lastEmit > 200) {
+            lastEmit = now;
+            send({ phase: 'progress', received, total });
+          }
+        });
+        res.pipe(file);
+        file.on('finish', () => file.close((err) => err ? reject(err) : resolve(true)));
+        res.on('error', reject);
+        file.on('error', reject);
+      });
+      req.on('error', reject);
+    });
+    try {
+      await get(url);
+      fs.renameSync(tmp, dst);
+      send({ phase: 'done', path: dst });
+      return { ok: true, path: dst };
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch {}
+      send({ phase: 'error', error: err.message });
+      return { ok: false, reason: err.message };
+    } finally {
+      downloadInFlight = null;
+    }
+  })();
+  return downloadInFlight;
+});
+
 // ---- Local intent classifier (semantic command matcher) ---------------------------
 ipcMain.handle('intent:status', () => intentEngine.getStatus());
 ipcMain.handle('intent:warmup', async () => {
@@ -449,7 +541,10 @@ ipcMain.handle('whisper:local', async (_e, { wavBase64, lang }) => {
     if (process.env.WHISPER_TRANSLATE === '1') args.push('-tr');
 
     const text = await new Promise((resolve, reject) => {
-      const p = spawn(det.cli, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const env = { ...process.env };
+      // Для bundled whisper-cli указываем, где искать ggml backend-плагины (.so).
+      if (det.bundled) env.GGML_BACKEND_PATH = VENDOR_WHISPER_LIBS;
+      const p = spawn(det.cli, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
       let out = '', err = '';
       p.stdout.on('data', (d) => { out += d.toString(); });
       p.stderr.on('data', (d) => { err += d.toString(); });
